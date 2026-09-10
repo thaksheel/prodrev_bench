@@ -1,0 +1,174 @@
+# DTE (Debate, Train, Evolve) Framework Configuration
+# Example configuration matching the original DTE implementation
+
+# Model Configuration
+model:
+  base_model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+  max_length: 2048
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 50
+
+# Multi-Agent Debate Configuration
+debate:
+  num_agents: 3
+  max_rounds: 3
+
+  # Consensus detection (exact match with original DTE)
+  consensus_threshold: 1.0  # Legacy parameter
+  consensus_tolerance: 0.000000001  # Exact tolerance from original DTE (1e-9)
+
+  # Debate prompting (DTE uses structured debate, not RCR)
+  debate_prompting:
+    initial_prompt_type: "math"  # math, arc, general
+    include_agent_context: true
+    include_peer_solutions: true
+    defend_previous_answer: true
+    enabled: false  # DTE doesn't use explicit RCR
+    require_novel_reasoning: true
+    critique_pairs: 2
+
+  # Agent configuration
+  use_diverse_agents: false
+  agent_models: []
+
+  # Temperature annealing for larger models
+  temperature_annealing:
+    enabled: true
+    start_temp: 0.7
+    end_temp: 0.3
+    min_model_size: "3B"
+
+  # DTE-specific features
+  track_sycophancy: true
+  consolidate_reasoning: true
+
+# Dataset Configuration
+datasets:
+  train_datasets:
+    - name: "gsm8k"
+      path: "./data/gsm8k_train.json"
+      split: "train"
+      max_samples: 1000
+  eval_datasets:
+    - name: "gsm8k_test"
+      path: "./data/gsm8k_test.json"
+      split: "test"
+      max_samples: 200
+
+# GRPO Training Configuration
+training:
+  learning_rate: 0.00002
+  weight_decay: 0.01
+  warmup_steps: 50
+  max_epochs: 3
+  batch_size: 4
+  gradient_accumulation_steps: 4
+
+  # GRPO-specific parameters
+  grpo:
+    group_size: 4
+    advantage_normalization: true
+    clip_ratio: 0.2
+    kl_penalty: 0.02
+
+  # DTE Reward Functions (all 5 from original implementation)
+  rewards:
+    # Primary DTE reward weights
+    correctness_weight: 2.0    # Most important - correct answers
+    int_weight: 0.5           # Numeric answer format
+    strict_format_weight: 0.5 # Exact XML format compliance
+    soft_format_weight: 0.5   # Flexible XML format
+    xmlcount_weight: 0.5      # Granular XML scoring
+
+    # Legacy weights for backward compatibility
+    answer_weight: 2.0
+    format_weight: 0.5
+    length_weight: 0.5
+    length_tau: 120
+
+  # LoRA Configuration
+  lora:
+    enabled: true
+    rank: 128
+    alpha: 256
+    dropout: 0.05
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+
+# Evolution Configuration
+evolution:
+  max_rounds: 3
+  convergence_threshold: 0.01
+  patience: 2
+  samples_per_round: 500
+  validation_split: 0.2
+  validation_freq: 1
+
+# Logging and Monitoring
+logging:
+  level: "INFO"
+  log_dir: "./logs"
+  experiment_name: "dte_experiment"
+  save_checkpoints: true
+  checkpoint_freq: 100
+  track_metrics:
+    - "accuracy"
+    - "debate_consensus_rate"
+    - "sycophancy_rate"
+    - "average_reasoning_length"
+    - "training_loss"
+    - "kl_divergence"
+    - "correctness_reward"
+    - "format_reward"
+
+# Hardware Configuration
+hardware:
+  device: "auto"
+  mixed_precision: true
+  max_memory_per_gpu: "20GB"
+  gradient_checkpointing: true
+  num_workers: 4
+  dataloader_pin_memory: true
+
+# Path Configuration
+paths:
+  output_dir: "./outputs"
+  models_dir: "./models"
+  data_dir: "./data"
+  cache_dir: "./cache"
+  temp_dir: "./tmp"
+
+# Experiment Configuration
+experiment:
+  name: "dte_pipeline_v1"
+  description: "End-to-end DTE pipeline with structured debate and GRPO training"
+  tags:
+    - "dte"
+    - "multi-agent"
+    - "grpo"
+    - "reasoning"
+    - "debate"
+  seed: 42
+  deterministic: true
+
+  # Weights & Biases integration
+  wandb:
+    enabled: false
+    project: "dte-framework"
+    entity: null
+
+# Safety Configuration
+safety:
+  filter_toxic_content: true
+  max_reasoning_length: 1000
+  validate_model_outputs: true
+  check_format_compliance: true
+  auto_backup: true
+  backup_frequency: "1h"

@@ -1,0 +1,199 @@
+# DTE Framework Configuration
+# Main configuration file for Debate, Train, Evolve pipeline
+
+# === Model Configuration ===
+model:
+  # Base model to start with
+  base_model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+  base_model_path: null  # Optional: path to local model
+
+  # Model parameters
+  max_length: 2048
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 50
+
+# === Multi-Agent Debate Configuration ===
+debate:
+  # Number of agents in debate
+  num_agents: 3
+
+  # Maximum debate rounds
+  max_rounds: 3
+
+  # Debate termination criteria
+  consensus_threshold: 1.0  # All agents must agree to reach consensus
+
+  # RCR Prompting parameters
+  rcr_prompting:
+    enabled: true
+    require_novel_reasoning: true
+    critique_pairs: 2  # Number of peer critiques per agent
+
+  # Agent diversity (if using different models)
+  use_diverse_agents: false
+  agent_models: []  # List of different models for agents
+
+  # Temperature annealing for smaller models
+  temperature_annealing:
+    enabled: true
+    start_temp: 0.7
+    end_temp: 0.3
+    min_model_size: "3B"
+
+# === Dataset Configuration ===
+datasets:
+  # Training datasets
+  train_datasets:
+    - name: "gsm8k"
+      path: "openai/gsm8k"
+      split: "train"
+      max_samples: 1000
+
+    - name: "gsm_plus"
+      path: "qintongli/GSM-Plus"
+      split: "train"
+      max_samples: 500
+
+  # Evaluation datasets
+  eval_datasets:
+    - name: "gsm8k"
+      path: "openai/gsm8k"
+      split: "test"
+      max_samples: 500
+
+    - name: "math"
+      path: "hendrycks/competition_math"
+      split: "test"
+      max_samples: 200
+
+    - name: "arc_challenge"
+      path: "allenai/ai2_arc"
+      split: "ARC-Challenge"
+      max_samples: 200
+
+# === GRPO Training Configuration ===
+training:
+  # Training hyperparameters
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 50
+  max_epochs: 3
+  batch_size: 4
+  gradient_accumulation_steps: 4
+
+  # GRPO specific parameters
+  grpo:
+    group_size: 4  # Number of responses per query for group comparison
+    advantage_normalization: true
+    clip_ratio: 0.2
+    kl_penalty: 0.02
+
+  # Reward function weights
+  rewards:
+    answer_weight: 2.0
+    format_weight: 0.5
+    length_weight: 0.5
+    length_tau: 120
+
+  # LoRA configuration
+  lora:
+    enabled: true
+    rank: 128
+    alpha: 256
+    dropout: 0.05
+    target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+# === Evolution Configuration ===
+evolution:
+  # Number of evolution rounds
+  max_rounds: 3
+
+  # Convergence criteria
+  convergence_threshold: 0.01  # Stop if improvement < 1%
+  patience: 2  # Stop after N rounds without improvement
+
+  # Data generation per round
+  samples_per_round: 500
+
+  # Validation settings
+  validation_split: 0.2
+  validation_freq: 1  # Validate every N epochs
+
+# === Logging and Monitoring ===
+logging:
+  # Log level (DEBUG, INFO, WARNING, ERROR)
+  level: "INFO"
+
+  # Log file paths
+  log_dir: "./logs"
+  experiment_name: "dte_experiment"
+
+  # Progress tracking
+  save_checkpoints: true
+  checkpoint_freq: 100  # Save every N steps
+
+  # Metrics to track
+  track_metrics:
+    - "accuracy"
+    - "debate_consensus_rate"
+    - "sycophancy_rate"
+    - "average_reasoning_length"
+    - "training_loss"
+    - "kl_divergence"
+
+# === Hardware Configuration ===
+hardware:
+  # Device settings
+  device: "auto"  # auto, cpu, cuda, mps
+  mixed_precision: true
+
+  # Memory management
+  max_memory_per_gpu: "20GB"
+  gradient_checkpointing: true
+
+  # Parallel processing
+  num_workers: 4
+  dataloader_pin_memory: true
+
+# === Paths and Storage ===
+paths:
+  # Output directories
+  output_dir: "./outputs"
+  models_dir: "./models"
+  data_dir: "./data"
+  cache_dir: "./cache"
+
+  # Temporary storage
+  temp_dir: "./tmp"
+
+# === Experiment Tracking ===
+experiment:
+  # Experiment metadata
+  name: "dte_pipeline_v1"
+  description: "End-to-end DTE pipeline with RCR prompting and GRPO training"
+  tags: ["dte", "multi-agent", "grpo", "reasoning"]
+
+  # Reproducibility
+  seed: 42
+  deterministic: true
+
+  # Wandb integration (optional)
+  wandb:
+    enabled: false
+    project: "dte-framework"
+    entity: null
+
+# === Safety and Validation ===
+safety:
+  # Content filtering
+  filter_toxic_content: true
+  max_reasoning_length: 1000
+
+  # Model validation
+  validate_model_outputs: true
+  check_format_compliance: true
+
+  # Backup and recovery
+  auto_backup: true
+  backup_frequency: "1h"
