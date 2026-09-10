@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 from typing import Literal, Tuple, Dict
 from transformers import (
@@ -7,6 +6,9 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedModel,
 )
+from transformers import logging
+
+logging.set_verbosity_error()
 
 
 class LLMResponse:
@@ -58,17 +60,22 @@ class LLMResponse:
             )
         else:
             # fallback to manual serialization
-            return self.manual_build_prompt(messages)
+            # return self.manual_build_prompt(messages)
+            return None 
 
     def response(self, messages: Dict[str, str]):
         prompt = self.build_prompt(messages=messages)
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        if prompt is None:
+            raise ValueError("prompt is None for message_list")
+        else:
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
         generated_ids = self.model.generate(
             **inputs,
             max_new_tokens=self.max_new_tokens,
             do_sample=False,
         )
-        output = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+        generated = generated_ids[0][inputs["input_ids"].shape[1] :]
+        output = self.tokenizer.decode(generated, skip_special_tokens=True)
         return output
 
 
