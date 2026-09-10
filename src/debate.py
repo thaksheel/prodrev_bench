@@ -1,12 +1,9 @@
-import pandas as pd
-import numpy as np
-import json
 from tqdm import tqdm
 import torch
-from typing import Literal, Dict, List, Optional, Tuple
+from typing import Literal, Dict, List, Tuple
 
-from agent import Agent
-from llm_response import LLMResponse
+from .agent import Agent
+from .llm_response import LLMResponse
 
 
 class Debate:
@@ -86,7 +83,7 @@ class Debate:
     def simulate_debate(self, sentences: List[str]):
         results = []
         reasonings = []
-        for text in sentences:
+        for text in tqdm(sentences):
             r, re = self.start_debate(text)
             results.append(r)
             reasonings.append(re)

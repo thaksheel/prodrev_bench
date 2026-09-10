@@ -1,7 +1,7 @@
-from typing import Literal, Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 import json
 
-from llm_response import LLMResponse
+from .llm_response import LLMResponse
 
 
 class Agent:
@@ -105,10 +105,16 @@ Important:
 """
         prompt = prompt.replace("##text##", text)
         prompt = prompt.replace("##history##", history)
-        messages = [{"role": "user", "content": f"{prompt}"}]
+        messages = [
+            {"role": "system", "content": "follow the given instructions."}, 
+            {"role": "user", "content": f"{prompt}"},
+        ]
         out = self.get_response(messages)
-        out = json.loads(out)
-        final_cls, reasoning = int(out["Rating"]), out["Reason"]
+        start = out.find("{")
+        end = out.rfind("}") + 1
+        json_str = out[start:end]
+        d = json.loads(json_str)
+        final_cls, reasoning = int(d["Rating"]), d["Reason"]
         return final_cls, reasoning
 
     def clear_memory(self):
