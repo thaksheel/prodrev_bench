@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
-import torch
 import json
 from sklearn.model_selection import train_test_split
 
@@ -26,6 +25,13 @@ debate = Debate(
 )
 final_cls, reasoning = debate.start_debate(sentences[0])
 results, reasonings = debate.simulate_debate(sentences)
+df_results = pd.DataFrame({
+    "rating": groundtruth, 
+    "results": results, 
+    "sentence": sentences, 
+    "reasoning": reasonings,
+})
+df_results.to_excel("./exports/results.xlsx")
 results = np.array(results)
 accurate = (groundtruth == results).sum()
 debate.save_reasoning()
