@@ -13,7 +13,7 @@ with open("./exports/references.json", "r", encoding="utf-8") as f:
 filename = "./data/sr.csv"
 df = pd.read_csv(filename)
 df = df.dropna(subset=["review"])
-_, sample = train_test_split(df, train_size=0.8, random_state=42, stratify=df.rating)
+_, sample = train_test_split(df, test_size=6000, random_state=42, stratify=df.rating)
 sentences = sample.review.tolist()
 groundtruth = sample.rating.to_numpy()
 debate = Debate(
