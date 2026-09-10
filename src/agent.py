@@ -113,9 +113,13 @@ Important:
         start = out.find("{")
         end = out.rfind("}") + 1
         json_str = out[start:end]
-        d = json.loads(json_str)
-        final_cls, reasoning = int(d["Rating"]), d["Reason"]
-        return final_cls, reasoning
+        try: 
+            d = json.loads(json_str)
+            final_cls, reasoning = int(d["Rating"]), d["Reason"]
+            return final_cls, reasoning
+        except json.decoder.JSONDecoder: 
+            print(f"---> `out` from final_judgement={out}")
+            return None 
 
     def clear_memory(self):
         self.memory_collection: Dict[int, List[str]] = {}

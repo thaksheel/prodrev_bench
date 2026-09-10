@@ -6,7 +6,11 @@ from sklearn.model_selection import train_test_split
 
 from src.debate import Debate
 
+modelname = "meta-llama/Llama-2-70b-hf"
+modelname = "meta-llama/Llama-2-7b-hf"
+modelname = "meta-llama/Llama-3.1-8B-Instruct"
 modelname = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+modelname = "Qwen/Qwen2.5-7B-Instruct"
 with open("./exports/references.json", "r", encoding="utf-8") as f:
     references = json.load(f)
 filename = "./data/sr.csv"
@@ -31,9 +35,9 @@ df_results = pd.DataFrame({
     "sentence": sentences, 
     "reasoning": reasonings,
 })
-df_results.to_excel("./exports/results.xlsx")
+df_results.to_excel("./exports/results1.xlsx")
 results = np.array(results)
 accurate = (groundtruth == results).sum()
 debate.save_reasoning()
-print(f"---> accuracy={accurate:.4f}")
+print(f"---> accuracy={accurate/len(groundtruth):.4f}")
 print("END")

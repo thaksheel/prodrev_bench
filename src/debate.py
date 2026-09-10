@@ -65,8 +65,12 @@ class Debate:
             llm_responder=self.llm,
             total_rounds=self.num_rounds,
         )
-        final_cls, reasoning = judge.final_judgement(text, history)
-        return final_cls, reasoning
+        judgement = judge.final_judgement(text, history)
+        if judgement is None: 
+            return None 
+        else: 
+            final_cls, reasoning = judgement[0], judgement[1]
+            return final_cls, reasoning
 
     def start_debate(self, text: str):
         self.init_agent()
@@ -77,20 +81,25 @@ class Debate:
                     rebuddle = [agent.opinions[-1] for agent in self.agents]
                     rebuddle = " ".join(rebuddle)
                 a = agent.debate(text, round_num=r, rebuddle=rebuddle)
-        final_cls, reasoning = self.judgment(text)
-        return final_cls, reasoning
+        j = self.judgment(text)
+        if j is None: 
+            return None
+        else: 
+            return j[0], j[1]
 
     def simulate_debate(self, sentences: List[str]):
         results = []
         reasonings = []
         for text in tqdm(sentences):
-            r, re = self.start_debate(text)
-            results.append(r)
-            reasonings.append(re)
+            j = self.start_debate(text)
+            if j is None: 
+                results.append(None)
+                reasonings.append(None)
+            else:
+                r, re = j[0], j[1]
+                results.append(r)
+                reasonings.append(re)
         return results, reasonings
 
     def save_reasoning(self):
         pass
-
-
-
