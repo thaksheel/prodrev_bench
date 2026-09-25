@@ -1,7 +1,7 @@
 import numpy as np 
 import pandas as pd 
 
-from .modules.debate_train_evolve import dte 
+from modules.debate_train_evolve import dte 
 
 model_name = "Qwen/Qwen2.5-7B-Instruct"
 result = dte.debate(

@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..data.generator import DebateDataGenerator
+from ..data_cls.generator import DebateDataGenerator
 from ..debate.manager import DebateManager
 from ..training.grpo_trainer import GRPOTrainer
 from .config import DTEConfig

@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..data.dataset_manager import DatasetManager
+from ..data_cls.dataset_manager import DatasetManager
 from ..debate.manager import DebateManager
 from ..utils.answer_extraction import clean_numeric_string
 from .logger import DTELogger

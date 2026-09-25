@@ -48,7 +48,7 @@ except ImportError:
     PEFT_AVAILABLE = False
 
 from ..core.logger import DTELogger
-from ..data.generator import TrainingExample
+from ..data_cls.generator import TrainingExample
 from .reward_model import DTERewardModel
 
 
