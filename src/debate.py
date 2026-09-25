@@ -3,6 +3,7 @@ import torch
 from typing import Literal, Dict, List, Tuple
 
 from .agent import Agent
+from . import ApiResponse
 from .llm_response import LLMResponse
 
 
@@ -10,21 +11,31 @@ class Debate:
     def __init__(
         self,
         model_name: str,
+        provider: Literal["openai", "anthropic", "open_weights", "gemini"],
         device: Literal["cpu", "cuda"],
         max_new_token: int,
         num_agents: int,
         num_rounds: int,
         references: Dict[str, List[str]],
+        api_key: str = None, 
     ):
         self.num_rounds = num_rounds
         self.num_agents = num_agents
         self.references = references
+        self.provider = provider
         # post init
-        self.llm = LLMResponse(
-            model_name=model_name,
-            max_new_tokens=max_new_token,
-            device=torch.device(device),
-        )
+        if provider == "open_weights":
+            self.llm = LLMResponse(
+                model_name=model_name,
+                max_new_tokens=max_new_token,
+                device=torch.device(device),
+            )
+        else: 
+            self.llm = ApiResponse(
+                model_name=model_name, 
+                provider=provider, 
+                api_key=api_key,
+            )
         # null fields
         self.agents: List[Agent] = []
         self.judge: Agent = None

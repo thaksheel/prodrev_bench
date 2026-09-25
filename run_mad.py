@@ -1,22 +1,27 @@
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+from dotenv import load_dotenv
 import json
+import os 
 from sklearn.model_selection import train_test_split
 
 from src.debate import Debate
+
+load_dotenv()
 
 modelname = "meta-llama/Llama-2-70b-hf"
 modelname = "meta-llama/Llama-2-7b-hf"
 modelname = "meta-llama/Llama-3.1-8B-Instruct"
 modelname = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 modelname = "Qwen/Qwen2.5-7B-Instruct"
+modelname = "gpt-5.6-luna"
 with open("./exports/references.json", "r", encoding="utf-8") as f:
     references = json.load(f)
 filename = "./data/sr.csv"
 df = pd.read_csv(filename)
 df = df.dropna(subset=["review"])
-_, sample = train_test_split(df, test_size=6000, random_state=42, stratify=df.rating)
+_, sample = train_test_split(df, test_size=200, random_state=42, stratify=df.rating)
 sentences = sample.review.tolist()
 groundtruth = sample.rating.to_numpy()
 debate = Debate(
@@ -26,6 +31,8 @@ debate = Debate(
     num_agents=5,
     num_rounds=3,
     references=references,
+    provider="openai", 
+    api_key=os.getenv("OPENAI_API_KEY"),
 )
 final_cls, reasoning = debate.start_debate(sentences[0])
 results, reasonings = debate.simulate_debate(sentences)
@@ -35,7 +42,7 @@ df_results = pd.DataFrame({
     "sentence": sentences, 
     "reasoning": reasonings,
 })
-df_results.to_excel("./exports/results1.xlsx")
+df_results.to_excel("./exports/rslt_openai_madp.xlsx")
 results = np.array(results)
 accurate = (groundtruth == results).sum()
 debate.save_reasoning()
