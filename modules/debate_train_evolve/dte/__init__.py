@@ -43,29 +43,16 @@ from .core.config import (
 )
 
 # Conditional imports for components that require external ML dependencies
-try:
-    from .core.pipeline import DTEPipeline
-    from .data_cls.dataset_manager import DatasetManager
-    from .data_cls.generator import DebateDataGenerator
-    from .debate.agent import DebateAgent
-    from .debate.manager import DebateManager, DebateResult
-    from .debate.prompts import DebatePromptManager, DebateResponse
-    from .training.grpo_trainer import GRPOTrainer
-    from .training.reward_model import DTERewardModel
+from .core.pipeline import DTEPipeline
+from .data_cls.dataset_manager import DatasetManager
+from .data_cls.generator import DebateDataGenerator
+from .debate.agent import DebateAgent
+from .debate.manager import DebateManager, DebateResult
+from .debate.prompts import DebatePromptManager, DebateResponse
+from .training.grpo_trainer import GRPOTrainer
+from .training.reward_model import DTERewardModel
 
-    _FULL_IMPORTS_AVAILABLE = True
-except ImportError:
-    DTEPipeline = None  # type: ignore[assignment,misc]
-    DebateManager = None  # type: ignore[assignment,misc]
-    DebateResult = None  # type: ignore[assignment,misc]
-    DebateAgent = None  # type: ignore[assignment,misc]
-    DebatePromptManager = None  # type: ignore[assignment,misc]
-    DebateResponse = None  # type: ignore[assignment,misc]
-    GRPOTrainer = None  # type: ignore[assignment,misc]
-    DTERewardModel = None  # type: ignore[assignment,misc]
-    DebateDataGenerator = None  # type: ignore[assignment,misc]
-    DatasetManager = None  # type: ignore[assignment,misc]
-    _FULL_IMPORTS_AVAILABLE = False
+_FULL_IMPORTS_AVAILABLE = True
 
 __all__ = [
     # Version info
@@ -116,7 +103,7 @@ def debate(
     device: str = "auto",
     temperature: float = 0.7,
     verbose: bool = False,
-) -> "DebateResult":
+) -> DebateResult:
     """Run a quick multi-agent debate on a single query.
 
     This is the simplest way to use the DTE framework. It creates a

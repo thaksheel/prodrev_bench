@@ -61,10 +61,10 @@ def evaluate_ratings(df, true_col="rating", pred_col="results"):
 
     return result_df
 
+if __name__ == "__main__": 
+    df = pd.read_excel("./exports/rslt_openai_madp.xlsx")
+    df_results = evaluate_ratings(df)
+    df_results["len"] = [len(df)] * len(df_results)
 
-df = pd.read_excel("./exports/rslt_openai_madp.xlsx")
-df_results = evaluate_ratings(df)
-df_results["len"] = [len(df)] * len(df_results)
-
-print(df_results)
-print("END")
+    print(df_results)
+    print("END")
