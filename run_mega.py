@@ -19,8 +19,12 @@ params = Params(
     ceo_name="Bob",
 )
 runner = Runner(log_path="./exports/logs.txt")
-# NOTE: the prompt has a specific format before I can use it. 
-prompt = """You are Bob and I want you to rate the product reviews below from 1-5. product review: I like it fine. The color is very very subtle. I don't think I will purchase this again."""
+# NOTE: the prompt has a specific format before I can use it.
+product_review = """I like it fine. The color is very very subtle. I don't think I will purchase this again."""  # 5
+prompt: str = f"""
+
+"""
+
 runner.run(params, prompt=prompt)
 
 
