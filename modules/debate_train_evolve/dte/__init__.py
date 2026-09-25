@@ -45,8 +45,8 @@ from .core.config import (
 # Conditional imports for components that require external ML dependencies
 try:
     from .core.pipeline import DTEPipeline
-    from .data.dataset_manager import DatasetManager
-    from .data.generator import DebateDataGenerator
+    from .data_cls.dataset_manager import DatasetManager
+    from .data_cls.generator import DebateDataGenerator
     from .debate.agent import DebateAgent
     from .debate.manager import DebateManager, DebateResult
     from .debate.prompts import DebatePromptManager, DebateResponse
