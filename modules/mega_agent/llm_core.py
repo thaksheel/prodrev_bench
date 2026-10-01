@@ -5,6 +5,7 @@ Single implementation of the modern Chat Completions tool-use interface
 here; all framework logic, prompts and tool schemas stay in their
 original files unchanged.
 """
+
 import json
 import logging
 
@@ -83,11 +84,13 @@ def _clean_tool_calls(tool_calls):
         arguments = fn.get("arguments")
         if not isinstance(arguments, str):
             arguments = json.dumps(arguments if arguments is not None else {})
-        cleaned.append({
-            "id": tc.get("id"),
-            "type": "function",
-            "function": {"name": fn.get("name"), "arguments": arguments},
-        })
+        cleaned.append(
+            {
+                "id": tc.get("id"),
+                "type": "function",
+                "function": {"name": fn.get("name"), "arguments": arguments},
+            }
+        )
     return cleaned
 
 
@@ -147,10 +150,12 @@ def sanitize_messages(messages):
                     else:
                         out.append({"role": "user", "content": t["content"]})
             else:
-                out.append({
-                    "role": "assistant",
-                    "content": msg["content"] if msg["content"] is not None else "",
-                })
+                out.append(
+                    {
+                        "role": "assistant",
+                        "content": msg["content"] if msg["content"] is not None else "",
+                    }
+                )
                 for t in run:
                     out.append({"role": "user", "content": t["content"]})
             i = j
@@ -173,8 +178,14 @@ def _accumulate_stream(stream):
     streaming, bytes flow from the first chunk and the connection stays
     alive for arbitrarily long generations.
     """
-    resp = {"id": None, "object": "chat.completion", "created": None,
-            "model": None, "choices": [], "usage": None}
+    resp = {
+        "id": None,
+        "object": "chat.completion",
+        "created": None,
+        "model": None,
+        "choices": [],
+        "usage": None,
+    }
     slots = {}
     for chunk in stream:
         c = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
@@ -185,22 +196,31 @@ def _accumulate_stream(stream):
             resp["usage"] = c["usage"]
         for ch in c.get("choices") or []:
             idx = ch.get("index") or 0
-            slot = slots.setdefault(idx, {
-                "message": {"role": "assistant", "content": None, "tool_calls": {}},
-                "finish_reason": None,
-            })
+            slot = slots.setdefault(
+                idx,
+                {
+                    "message": {"role": "assistant", "content": None, "tool_calls": {}},
+                    "finish_reason": None,
+                },
+            )
             if ch.get("finish_reason"):
                 slot["finish_reason"] = ch["finish_reason"]
             delta = ch.get("delta") or {}
             if delta.get("role"):
                 slot["message"]["role"] = delta["role"]
             if delta.get("content") is not None:
-                slot["message"]["content"] = (slot["message"]["content"] or "") + delta["content"]
+                slot["message"]["content"] = (slot["message"]["content"] or "") + delta[
+                    "content"
+                ]
             for tc in delta.get("tool_calls") or []:
-                t = slot["message"]["tool_calls"].setdefault(tc.get("index") or 0, {
-                    "id": None, "type": "function",
-                    "function": {"name": None, "arguments": ""},
-                })
+                t = slot["message"]["tool_calls"].setdefault(
+                    tc.get("index") or 0,
+                    {
+                        "id": None,
+                        "type": "function",
+                        "function": {"name": None, "arguments": ""},
+                    },
+                )
                 if tc.get("id"):
                     t["id"] = tc["id"]
                 fn = tc.get("function") or {}
@@ -225,13 +245,15 @@ def _accumulate_stream(stream):
                 seen_ids.add(t["id"])
             tool_calls.append(t)
         msg["tool_calls"] = tool_calls or None
-        resp["choices"].append({"index": idx, "message": msg,
-                                "finish_reason": slot["finish_reason"]})
+        resp["choices"].append(
+            {"index": idx, "message": msg, "finish_reason": slot["finish_reason"]}
+        )
     return resp
 
 
-def chat_completion(messages, model, tools=None, api_key=None, base_url=None,
-                    reasoning_effort=None):
+def chat_completion(
+    messages, model, tools=None, api_key=None, base_url=None, reasoning_effort=None
+):
     """One Chat Completions request. Returns the response as a plain dict
     (legacy shape), or {'error': str(e)} so callers' retry loops keep their
     original semantics. Deliberately sends no temperature and no
@@ -242,11 +264,6 @@ def chat_completion(messages, model, tools=None, api_key=None, base_url=None,
     """
     try:
         sent = sanitize_messages(messages)
-        # Gateway-compat shim: some gateways proxy chat.completions onto the
-        # Responses API upstream and deterministically 502 on conversations
-        # that contain no user/assistant turn (e.g. an agent whose memory is
-        # still only its system prompt). An empty user turn is accepted and
-        # adds no prompt text.
         if not any(m["role"] in ("user", "assistant") for m in sent):
             sent = sent + [{"role": "user", "content": ""}]
         kwargs = {

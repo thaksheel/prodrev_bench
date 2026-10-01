@@ -1,23 +1,61 @@
 from typing import Any, List, Literal, Optional
-from dataclasses import dataclass 
+from dataclasses import dataclass
 
 
 @dataclass
-class Params: 
-    api_key: str 
+class Params:
+    api_key: str
     model: Literal["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna"]
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"]
     max_memory: int = 10
-    max_rounds: int = 20 
-    max_subordinates: int = 5 
-    share_file: bool = True #sharing files across agents 
+    max_rounds: int = 20
+    max_subordinates: int = 5
+    share_file: bool = True  # sharing files across agents
     ceo_name: str = "Bob"
-    base_url: str = 'https://api.openai.com/v1'
+    base_url: str = "https://api.openai.com/v1"
+
 
 @dataclass
-class Prompt: 
-    # TODO: change to a full class to parse the product reviews into prompts properly 
-    initial_prompt:str = r'''
+class LLMOut:
+    response: str
+    input_token: int
+    output_token: int
+    model_name: str
+    provider: str
+
+
+class MegaPrompt:
+    def __init__(self):
+        self.task_ins: str = None 
+        self.leader_name: str = None 
+
+    def get_mega_intrustions(self, leader_name: str, task_ins:str): 
+        head = f"""You are {leader_name}, the leader of a general purpose company high reputation and highly effective company. Your company's current goal is to {task_ins}. You are now recruiting employees and assigning work to them. For each employee(including yourself), please write a prompt. Please specify their name(one word, no prefix), their jobs, what kinds of work he needs to do. You MUST clarify all their possible collaborators' names and their jobs in the prompt. The format should be like (The example is for Alice in another novel writing project):
+""" 
+        agent_format = f"""<agent name="Alice">
+    You are Alice, a novelist. Your job is to write a single chapter of a novel with 1000 words according to the outline (outline.txt) from Carol, the architect designer, and pass it to David (chapter_x.txt), the editor. Please only follow this routine. Your collarborators include Bob(the Boss), Carol(the architect designer) and David(the editor).
+    </agent>"""
+        task_delegation = f"""Please note that every employee is lazy, and will not care anything not mentioned by your prompt. To ensure the completion of your project, the work of each employee should be **non-divisable**, detailed in specific action (like what file to write. Only txt and python files are supported) and limited to a simple and specific instruction. All the employees (including yourself) should cover the whole SOP. Speed up the process by adding more employees to divide the work. Make sure to have at least 2 employees. 
+"""
+        self.leader_name = leader_name 
+        self.task_ins = task_ins
+        return head + agent_format + task_delegation 
+
+    def get_mega_prompt(self):
+        operations = f"""You can only output function calls in your response. DO NOT output anything else directly.
+
+    Leave a remarkable TODO in your TODO list(by using the change_task_status function) whenever there is an unfinished task. Please keep updating your TODO list until everything is done. In that case, you should clear your TODO list txt file(write nothing into it) and call the 'terminate' function.
+
+    Please note that ALL your output must be function calls. Do not output directly! For example, if you want to talk to someone, you should call the 'talk' function.""" 
+        return self.task_ins + operations
+
+    def get_mega_project_start(self):
+        pass 
+
+    def get_mega_complete_todos(self):
+        pass 
+
+    sample_initial_prompt: str = r"""
     You are Bob, the leader of a software development club. Your club's current goal is to develop a Gobang game with a very strong AI, no frontend, and can be executed by running 'main.py'. Remember to test it. You are now recruiting employees and assigning work to them. For each employee(including yourself), please write a prompt. Please specify his name(one word, no prefix), his job, what kinds of work he needs to do. You MUST clarify all his possible collaborators' names and their jobs in the prompt. The format should be like (The example is for Alice in another novel writing project):
 
     <agent name="Alice">
@@ -25,9 +63,9 @@ class Prompt:
     </agent>
 
     Please note that every employee is lazy, and will not care anything not mentioned by your prompt. To ensure the completion of your project, the work of each employee should be **non-divisable**, detailed in specific action(like what file to write. Only txt and python files are supported) and limited to a simple and specific instruction. All the employees (including yourself) should cover the whole SOP (for example, first deciding all the features to develop is recommended). Speed up the process by adding more employees to divide the work.
-    '''
+    """
 
-    additional_prompt: str = r'''
+    sample_additional_prompt: str = r"""
     Your club's current goal is to develop a Gobang game with a very strong AI, no frontend, and can by executed by running 'main.py'. The project should be executable in files.
 
     You can only output function calls in your response. DO NOT output anything else directly.
@@ -35,4 +73,4 @@ class Prompt:
     Leave a remarkable TODO in your TODO list(by using the change_task_status function) whenever there is an unfinished task. Please keep updating your TODO list until everything is done. In that case, you should clear your TODO list txt file(write nothing into it) and call the 'terminate' function.
 
     Please note that ALL your output must be function calls. Do not output directly! For example, if you want to talk to someone, you should call the 'talk' function.
-    '''
+    """

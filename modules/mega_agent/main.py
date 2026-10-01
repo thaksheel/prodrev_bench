@@ -8,10 +8,7 @@ from . import (
     agent_dict,
     git_lock,
     Agent,
-    input_token,
-    output_token,
     git_commit,
-    delete_all_files_in_folder,
     Params,
 )
 
@@ -33,33 +30,36 @@ class Runner:
         logger.setLevel(logging.INFO)
 
     def init_files(self):
-        # delete_all_files_in_folder("logs")
-        # delete_all_files_in_folder("files")
         git_commit("Initial commit")
         if os.path.exists(self.log_path):
             os.remove(self.log_path)
         self.init_logger()
 
-    def run(self, param: Params, prompt: str):
-        begin_time = time.time()
-        meta_output = get_llm_response(
-            messages=[{"role": "system", "content": prompt}],
+    def run(self, param: Params, task_instruction: str, prompt: str):
+        messages = [
+            {"role": "system", "content": task_instruction},
+            {
+                "role": "user",
+                "content": "Create the agents and assign the tasks for them.",
+            },  # temp
+        ]
+        out = get_llm_response(
+            messages=messages,
             enable_tools=False,
             params=param,
-        )["choices"][0]["message"]["content"]
-        logging.info(meta_output)
+        )
+        agents_instructions = out['choices'][0]["message"]["content"]
         agent_pattern = re.compile(r'<agent name="(\w+)">(.*?)</agent>', re.DOTALL)
-        agents = agent_pattern.findall(meta_output)
-        for agent in agents:
-            if agent[0] == param.ceo_name:
-                agent_dict[agent[0]] = Agent(agent[0], agent[1], param)
-
-        for agent in agents:
-            if agent[0] != param.ceo_name:
+        agent_names_tasks = agent_pattern.findall(agents_instructions)
+        for name, task in agent_names_tasks:
+            if name == param.ceo_name:
+                agent_dict[name] = Agent(name, task, param)
+        for name, task in agent_names_tasks:
+            if name != param.ceo_name:
                 agent_dict[param.ceo_name].add_subordinate(
-                    name=agent[0],
+                    name=name,
                     description="",
-                    initial_prompt=agent[1],
+                    initial_prompt=task,
                     params=param,
                     additional_prompt="",
                 )
@@ -99,7 +99,3 @@ class Runner:
                         break
                     else:
                         continue
-        end_time = time.time()
-        logging.info(f"Time elapsed: {end_time-begin_time} seconds")
-        logging.info(f"Input tokens: {input_token}, output tokens: {output_token}")
-        logging.info(f"Number of agents: {len(agent_dict)}")

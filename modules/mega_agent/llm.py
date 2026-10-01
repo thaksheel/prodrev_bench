@@ -180,15 +180,8 @@ def _get_llm_response(messages, params: Params, enable_tools=True, agent_name=""
 
 def get_llm_response(messages, params: Params, enable_tools=True, agent_name=""):
     response = _get_llm_response(messages, params, enable_tools, agent_name)
-    while "choices" not in response:
-        logging.error(response)
-        time.sleep(1)
-        response = _get_llm_response(messages, params, enable_tools, agent_name)
-    # if response['choices'][0]['message']['content']:
-    #     logging.info(response['choices'][0]['message']['content'])
     global input_token, output_token
     usage = response.get("usage") or {}
     input_token += usage.get("prompt_tokens") or 0
     output_token += usage.get("completion_tokens") or 0
-    logging.info(f"Input token: {input_token}, Output token: {output_token}")
     return response
