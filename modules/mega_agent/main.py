@@ -65,12 +65,14 @@ class Runner:
                 )
         agent_dict[param.ceo_name].enqueue(
             "user",
-            "Now let's start the project. Please split the task and talk to your subordinates to assign the tasks.",
+            f"Now complete this task:\n\n{prompt}\n\n"
+            "Coordinate with your subordinates as needed, and make sure the requested "
+            "deliverable is written to the output file specified in your task instructions.",
         )
         # Wait until all agents become idle
         while True:
             time.sleep(1)
-            if all(agent.state == "idle" for agent in agent_dict.values()):
+            if all([agent.state == "idle" for agent in agent_dict.values()]):
                 ok = True
                 for agent in agent_dict.values():
                     try:

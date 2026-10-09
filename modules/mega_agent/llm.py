@@ -112,8 +112,8 @@ def gen_tools(agent_name, share_file: bool = True):
                         "description": "The tasks you have done. You can write anything you want to remember.",
                     },
                 },
+                "required": ["todo", "done"],
             },
-            "required": ["content"],
         },
         {
             "name": "add_agent",

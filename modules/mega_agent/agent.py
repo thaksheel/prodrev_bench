@@ -5,6 +5,7 @@ import re
 import json
 import logging
 from typing import Dict
+from pathlib import Path
 
 from . import (
     get_llm_response,
@@ -14,7 +15,7 @@ from . import (
     start_interactive_subprocess,
     used_names,
     git_lock,
-    Params
+    Params,
 )
 
 chroma_client = chromadb.Client()
@@ -35,16 +36,20 @@ class Memory:
         self.logger.info(str(memory))
         self.history.append(memory)
 
-    def add_subordinate(self, name: str, description: str, initial_prompt: str, params: Params, additional_prompt: str = ""):
-        # TODO: additional_prompt does not work. Trace the stack from here and resolve 
+    def add_subordinate(
+        self,
+        name: str,
+        description: str,
+        initial_prompt: str,
+        params: Params,
+        additional_prompt: str = "",
+    ):
+        # TODO: additional_prompt does not work. Trace the stack from here and resolve
         self.subordinates[name] = description
         agent_dict[name] = Agent(
             name,
-            initial_prompt
-            + additional_prompt
-            + "\nYour supervisor is: "
-            + self.name,
-            params=params
+            initial_prompt + additional_prompt + "\nYour supervisor is: " + self.name,
+            params=params,
         )
 
     def get_subordinates(self):
@@ -107,13 +112,17 @@ class Memory:
                 init += f"\n\nHere is a relevant memory: \n{relevant_history['documents'][0][0]}\nBelow is the recent dialogue."
 
         memory = [{"role": "system", "content": init}]
-        for i in self.history[-max_memory :]:
+        for i in self.history[-max_memory:]:
             memory.append(i)
 
         return memory
 
-    def initialize_logger(self, name):
+    def initialize_logger(self, name, logpath: str = None):
         self.logger = logging.getLogger(name)
+        log_dir = Path(logpath if logpath else "logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"{name}.log"
+        log_file.touch(exist_ok=True)
 
         # Create a file handler for logging
         file_handler = logging.FileHandler(f"logs/{name}.log", encoding="utf-8")
@@ -323,7 +332,9 @@ class Agent(Memory):
             assistant_output = None
 
             while round_num < self.params.max_rounds:
-                response = get_llm_response(req, agent_name=self.name, params=self.params)
+                response = get_llm_response(
+                    req, agent_name=self.name, params=self.params
+                )
                 assistant_output = response["choices"][0]["message"]
                 llm_output = assistant_output["content"]
                 self.add_memory(assistant_output)
@@ -359,7 +370,9 @@ class Agent(Memory):
                 if terminated:
                     break
                 round_num += 1
-                response = get_llm_response(req, agent_name=self.name, params=self.params)
+                response = get_llm_response(
+                    req, agent_name=self.name, params=self.params
+                )
                 assistant_output = response["choices"][0]["message"]
                 llm_output = assistant_output["content"]
                 self.add_memory(assistant_output)
@@ -371,12 +384,15 @@ class Agent(Memory):
                             "content": "Error: No function call found in the response. You must use function calls to work and communicate with other agents. If you have nothing to do now, please call 'terminate' function.",
                         }
                     ]
-                    response = get_llm_response(req, agent_name=self.name, params=self.params)
+                    response = get_llm_response(
+                        req, agent_name=self.name, params=self.params
+                    )
                     assistant_output = response["choices"][0]["message"]
                     llm_output = assistant_output["content"]
                     self.add_memory(assistant_output)
                     round_num += 1
         self.state = "idle"
 
-# TODO: improve this 
+
+# TODO: improve this
 agent_dict: Dict[str, Agent] = {}

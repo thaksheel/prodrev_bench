@@ -28,10 +28,15 @@ params = Params(
     share_file=True,
     ceo_name=leader_name,
 )
-runner = Runner(log_path="./exports/logs.out")
+runner = Runner(log_path="./exports/logs.out") 
 mp = MegaPrompt()
 product_review = """I like it fine. The color is very very subtle. I don't think I will purchase this again."""  # 5
-task_ins = "You are leading a product text reviews analysis agency and you need to recruit agents with different tasks and analyse the product reviews affectively. You need to rate the online product reviews text from 1-5 as accurately as possible in order to capture the sentiment of the customers."
+task_ins = (
+    "You are leading a product review analysis agency. Evaluate the supplied review "
+    "and predict its overall star rating from 1 to 5 using only the review text. "
+    "Write the final rating and a brief evidence-based rationale to review.txt. "
+    "Do not use any label or comment outside the review text as evidence."
+)
 prompt = f"score this customer online product review from 1-5: {product_review}"
 
 out = runner.run(
@@ -39,6 +44,14 @@ out = runner.run(
     task_instruction=mp.get_mega_intrustions(leader_name, task_ins),
     prompt=prompt,
 )
+
+review_path = "./files/review.txt"
+if not os.path.isfile(review_path):
+    raise FileNotFoundError(
+        f"The agent run completed without creating the required output: {review_path}"
+    )
+with open(review_path, encoding="utf-8") as review_file:
+    out = review_file.read()
 
 print(out)
 print("END")
