@@ -1,5 +1,5 @@
 from .llm_core import wrap_tools, chat_completion
-from .config import Params, MegaPrompt, LLMOut
+from .config import Params, MegaPrompt, LLMOut, MASOut
 from .llm import get_llm_response, used_names, input_token, output_token, gen_tools
 from .utils import (
     git_lock,

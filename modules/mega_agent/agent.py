@@ -157,11 +157,15 @@ class Agent(Memory):
         self.package = None
         # self.logger.info(f"Agent {name} initialized with initial message: {initial_message}")
 
+        # null fields 
+        self.total_input_token: int = 0
+        self.total_output_token: int = 0
+
     def enqueue(self, speaker, message):
         with self.lock:
             self.message_queue.append({"role": speaker, "content": message})
         if self.state == "idle":
-            threading.Thread(target=self.run, args=()).start()
+            threading.Thread(target=self.run, args=(), daemon=True).start()
 
     def execute(self, tool_name, tool_info, arguments):
         tool_name = tool_name.lower()
@@ -332,10 +336,12 @@ class Agent(Memory):
             assistant_output = None
 
             while round_num < self.params.max_rounds:
-                response = get_llm_response(
+                out = get_llm_response(
                     req, agent_name=self.name, params=self.params
                 )
-                assistant_output = response["choices"][0]["message"]
+                self.total_input_token += out.input_token
+                self.total_output_token += out.output_token
+                assistant_output = out.response["choices"][0]["message"]
                 llm_output = assistant_output["content"]
                 self.add_memory(assistant_output)
                 req = self.get(self.params.max_memory)
@@ -370,10 +376,12 @@ class Agent(Memory):
                 if terminated:
                     break
                 round_num += 1
-                response = get_llm_response(
+                out = get_llm_response(
                     req, agent_name=self.name, params=self.params
                 )
-                assistant_output = response["choices"][0]["message"]
+                self.total_input_token += out.input_token
+                self.total_output_token += out.output_token
+                assistant_output = out.response["choices"][0]["message"]
                 llm_output = assistant_output["content"]
                 self.add_memory(assistant_output)
                 req += [assistant_output]
@@ -384,15 +392,17 @@ class Agent(Memory):
                             "content": "Error: No function call found in the response. You must use function calls to work and communicate with other agents. If you have nothing to do now, please call 'terminate' function.",
                         }
                     ]
-                    response = get_llm_response(
+                    out = get_llm_response(
                         req, agent_name=self.name, params=self.params
                     )
-                    assistant_output = response["choices"][0]["message"]
+                    self.total_input_token += out.input_token
+                    self.total_output_token += out.output_token
+                    assistant_output = out.response["choices"][0]["message"]
                     llm_output = assistant_output["content"]
                     self.add_memory(assistant_output)
                     round_num += 1
         self.state = "idle"
-
+        return True 
 
 # TODO: improve this
 agent_dict: Dict[str, Agent] = {}

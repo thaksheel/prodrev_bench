@@ -21,5 +21,7 @@ files/
 .env
 *.pyc
 *.log 
+.files
+.logs 
 doc.txt 
 

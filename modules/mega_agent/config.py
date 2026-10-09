@@ -14,14 +14,23 @@ class Params:
     ceo_name: str = "Bob"
     base_url: str = "https://api.openai.com/v1"
 
+@dataclass
+class MASOut: 
+    pred: int 
+    true: Optional[int] 
+    reasoning: str 
+    total_input_token: int 
+    total_output_token: int 
+    duration: float
 
 @dataclass
 class LLMOut:
-    response: str
+    response: str 
+    message: str
     input_token: int
     output_token: int
     model_name: str
-    provider: str
+    provider: str 
 
 
 class MegaPrompt:

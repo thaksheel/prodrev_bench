@@ -1,7 +1,7 @@
 import logging
 import time
 
-from . import chat_completion, wrap_tools, Params
+from . import chat_completion, wrap_tools, Params, LLMOut
 
 written_files = dict()
 used_names = set()
@@ -180,8 +180,14 @@ def _get_llm_response(messages, params: Params, enable_tools=True, agent_name=""
 
 def get_llm_response(messages, params: Params, enable_tools=True, agent_name=""):
     response = _get_llm_response(messages, params, enable_tools, agent_name)
-    global input_token, output_token
     usage = response.get("usage") or {}
-    input_token += usage.get("prompt_tokens") or 0
-    output_token += usage.get("completion_tokens") or 0
-    return response
+    input_token = usage.get("prompt_tokens") or 0
+    output_token = usage.get("completion_tokens") or 0 
+    return LLMOut(
+        response=response, 
+        message=response["choices"][0]["message"]["content"], 
+        input_token=input_token, 
+        output_token=output_token, 
+        model_name=params.model, 
+        provider="openai", 
+    )
