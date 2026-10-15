@@ -14,7 +14,7 @@ filename = "./data/sr.csv"
 size = 10
 df = pd.read_csv(filename)
 df = df.dropna(subset=["review"])
-_, sample = train_test_split(df, test_size=size, random_state=42, stratify=df.rating)
+_, sample = train_test_split(df, test_size=size, random_state=44, stratify=df.rating)
 sentences = sample.review.tolist()
 groundtruth = sample.rating.to_numpy()
 
