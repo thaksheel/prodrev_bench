@@ -10,7 +10,7 @@ from src import CloseModelSelection
 
 load_dotenv()
 
-SIZE = 10  
+SIZE = 200 
 MAX_WORKERS = 4  
 PLAN_PATH = "./exports/mega_plan.txt"  
 LEADER = "Erza"
@@ -27,10 +27,9 @@ params = Params(
     ceo_name=LEADER,
     max_memory=6,
     max_rounds=3,
-    max_subordinates=2,  # team = leader + 2 employees
-    parallel_kickoff=True,  # False = original "leader delegates first" flow
+    max_subordinates=2, 
+    parallel_kickoff=True, 
     timeout_s=60,
-    # temperature=0, seed=44,  # enable if your endpoint accepts them
 )
 
 task_ins = (
