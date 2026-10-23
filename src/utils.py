@@ -30,3 +30,5 @@ class LLMOut:
     output_token: int
     model_name: str
     provider: str
+
+
