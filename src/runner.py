@@ -342,26 +342,36 @@ class Runner:
         )
         return row
 
+    def available_methods(self) -> List[str]:
+        """Names of every configured method, in run order."""
+        names = list(self.config.prompt_methods)
+        if self.config.mad is not None:
+            names.append("mad")
+        if self.config.mega is not None:
+            names.append("mega")
+        return names
+
+    def predict(self, name: str) -> pd.DataFrame:
+        """Run one method by name and return its predictions."""
+        if name == "mad":
+            return self.run_mad()
+        if name == "mega":
+            return self.run_mega()
+        return self.run_prompt_method(name, self.config.prompt_methods[name])
+
     def run(self, methods: Optional[List[str]] = None) -> pd.DataFrame:
         """Run the selected methods (default: every configured one) and judge each."""
-        cfg = self.config
-        jobs = {
-            n: (lambda n=n, m=m: self.run_prompt_method(n, m))
-            for n, m in cfg.prompt_methods.items()
-        }
-        if cfg.mad is not None:
-            jobs["mad"] = self.run_mad
-        if cfg.mega is not None:
-            jobs["mega"] = self.run_mega
-        if methods is not None:
-            jobs = {n: jobs[n] for n in methods}
+        if methods is None:
+            methods = self.available_methods()
 
         rows = []
-        for name, job in jobs.items():
+        for name in methods:
             print(f"[{name}] predicting {len(self.eval_df_)} reviews")
-            self.predictions_[name] = job()
+            predictions = self.predict(name)
+            self.predictions_[name] = predictions
             print(f"[{name}] judging")
-            rows.append(self._judge_method(name, self.predictions_[name]))
+            rows.append(self._judge_method(name, predictions))
+
         self.comparison_ = pd.DataFrame(rows).set_index("method")
         return self.comparison_
 

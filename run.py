@@ -20,19 +20,19 @@ predictor = LLMProvider(
     provider="openai",
     model_name=llm_model,
     token=openai_key,
-    temperature=0,
+    temperature=1,
 )
 judge_provider = LLMProvider(
     provider="openai",
     model_name=llm_model,
     token=openai_key,
-    temperature=0,
+    temperature=1,
 )
 
 config = RunnerConfig(
     data_path="./data/sr.csv",
     sample_size=5000,
-    eval_limit=20,
+    eval_limit=500,
     seed=42,
     max_workers=4,
     # prompt_methods={"zero-shot": None},
@@ -48,7 +48,7 @@ config = RunnerConfig(
         params=Params(
             api_key=openai_key,
             model=llm_model,
-            reasoning_effort="medium",
+            reasoning_effort="none",
             ceo_name="Erza",
             max_memory=6,
             max_rounds=3,
