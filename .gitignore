@@ -17,6 +17,7 @@ exports/
 temp/
 logs/
 files/
+transformer_models/
 
 .env
 *.pyc

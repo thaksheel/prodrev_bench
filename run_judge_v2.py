@@ -8,7 +8,6 @@ from src.review_judge import JudgeConfig, ReviewRatingJudge
 
 load_dotenv()
 
-# --- Edit these ---------------------------------------------------------------
 INPUT_PATH = "./exports/mega_results_200.xlsx"
 OUTPUT_FILE = "./exports/judge_gpt6luna_signal"  # .xlsx is added if missing
 
@@ -26,7 +25,6 @@ config = JudgeConfig(
     n_samples=1,
     max_workers=4,         # use 1 for a local Hugging Face model
 )
-# ------------------------------------------------------------------------------
 
 if __name__ == "__main__":
     df = pd.read_excel(INPUT_PATH)

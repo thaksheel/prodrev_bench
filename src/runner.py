@@ -16,11 +16,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from src.llm_provider import LLMProvider
+from src.prompts import Prompt, PromptStrategy, RatingReasoning
 from . import LLMProvider, ReviewRatingJudge, PromptMethod, RunnerConfig
 
 METRICS = ["accuracy", "balanced_accuracy", "macro_f1", "mae", "rmse"]
@@ -158,7 +158,6 @@ class Runner:
     # Prompting methods
     # ------------------------------------------------------------------ #
     def run_prompt_method(self, name: str, method: PromptMethod) -> pd.DataFrame:
-        from src.prompts import Prompt, PromptStrategy, RatingReasoning
 
         fmt = RatingReasoning[method.output_format]
         embeddings = None

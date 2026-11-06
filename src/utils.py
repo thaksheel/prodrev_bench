@@ -1,4 +1,4 @@
-from typing import List, Dict, Literal, Optional
+from typing import List, Dict, Literal, Optional, Any 
 from dataclasses import dataclass, field
 from numpy.typing import NDArray
 from enum import Enum
@@ -141,7 +141,7 @@ def default_prompt_methods() -> Dict[str, PromptMethod]:
         "few_shot_random_cot": PromptMethod(
             "few-shots", "random", chain_of_thought=True
         ),
-        "few_shot_kate": PromptMethod("few-shots", "kate"),
+        # "few_shot_kate": PromptMethod("few-shots", "kate"),
     }
 
 
