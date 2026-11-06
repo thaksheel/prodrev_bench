@@ -6,7 +6,7 @@ import json
 import os 
 from sklearn.model_selection import train_test_split
 
-from src.debate import Debate
+from modules.mad_predict_re import Debate
 
 load_dotenv()
 
