@@ -1,12 +1,10 @@
-import re
-import time
+import re, json, time 
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
 from ..llm_provider import LLMProvider
-from ..review_judge import _parse_json
 from .agent import Agent, strip_thinking
 
 JUDGE_SYSTEM = "Follow the given instructions."
@@ -30,6 +28,22 @@ Important:
 - The "Reason" must be one concise sentence summarizing why that rating is correct.
 - Do NOT include any text outside the JSON object.
 """
+
+
+def _parse_json(text: Optional[str]) -> Optional[dict]:
+    """Extract the first {...} block from an LLM response."""
+    if not text:
+        return None
+    text = re.sub(r"```(?:json)?", "", str(text))
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)  # reasoning models
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        obj = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 def parse_judgement(text: str) -> Tuple[Optional[int], Optional[str]]:

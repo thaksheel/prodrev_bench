@@ -1,7 +1,6 @@
 from .utils import (
     CloseModelSelection,
     OpenModelSelection,
-    LLMOut,
     SYSTEM_PROMPT,
     DEFAULT_RUBRIC,
     DEFAULT_ANCHORS,
@@ -15,10 +14,10 @@ from .utils import (
     MegaConfig,
     RunnerConfig, 
 ) 
-from .mad import Debate
-from .mega import MegaRunner, MegaPrompt
+from .mad import Debate, MadConfig
+from .mega import MegaRunner, MegaPrompt, MegaConfig
 from .prompts import BertEncoder, KATEExamples, PromptBuilder, RandomExamples
-from .llm_provider import LLMProvider 
+from .llm_provider import LLMProvider, LLMOut
 from .review_judge import ReviewRatingJudge 
 from .runner import Runner
 

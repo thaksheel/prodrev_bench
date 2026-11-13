@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
+from ..llm_provider import LLMProvider
 
 
 @dataclass
@@ -88,3 +89,52 @@ class MASOut:
     sample_id: str = ""
     n_llm_calls: int = 0
     error: Optional[str] = None
+
+
+@dataclass
+class MegaConfig:
+    """Settings for the mega agent method.
+
+    Parameters
+    ----------
+    llm : LLMProvider, optional
+        Model used by every team member. None uses the runner's predictor.
+        Must be an "openai" provider: the agents rely on tool calling.
+        Its model name, token and temperature replace those in ``params``.
+    params : Params
+        Team settings (size, memory, rounds, timeout, reasoning effort, ...).
+    task_instruction : str
+        Task description given to the leader when it designs the team.
+    prompt_template : str
+        Per-review project input; must contain ``{review}``.
+    plan_path : str, default "./exports/mega_plan.txt"
+        Saved team plan; created on the first run and reused afterwards.
+    log_path : str, default "./exports/logs.out"
+        Log file.
+    run_dir : str, optional, default "./exports/mega_runs"
+        Folder for each review's files, transcript and result.
+    checkpoint_path : str, optional
+        Checkpoint CSV; gets a ``_seed<N>`` suffix so each seed has its own.
+    max_workers : int, default 4
+        Reviews processed in parallel.
+    progress : bool, default False
+        Print one line per finished review.
+    """
+
+    llm: Optional[LLMProvider] = None
+    params: Params = field(default_factory=Params)
+    task_instruction: str = (
+        "predict the overall star rating (1 to 5) a customer gave a product, using "
+        "only the text of their online review. Do not use any label or information "
+        "outside the review text as evidence. The final answer is an integer rating "
+        "with a brief evidence-based rationale."
+    )
+    prompt_template: str = (
+        "Score this customer online product review from 1-5: <review> {review} </review>"
+    )
+    plan_path: str = "./exports/mega_plan.txt"
+    log_path: str = "./exports/logs.out"
+    run_dir: Optional[str] = "./exports/mega_runs"
+    checkpoint_path: Optional[str] = None
+    max_workers: int = 4
+    progress: bool = False

@@ -2,7 +2,7 @@ import logging
 import time
 from functools import lru_cache
 
-from .. import LLMOut
+from ..llm_provider import LLMOut
 from .config import Params
 from .llm_core import chat_completion, wrap_tools
 

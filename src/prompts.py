@@ -85,13 +85,13 @@ class BertEncoder:
 
     def __init__(
         self,
+        device: torch.device,
         model_path: str = "./transformer_models/bert",
-        device: Optional[str] = None,
         batch_size: int = 64,
         max_length: int = 512,
     ):
         self._torch = torch
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         self.batch_size = batch_size
         self.max_length = max_length
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)

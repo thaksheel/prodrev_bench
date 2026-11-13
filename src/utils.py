@@ -1,3 +1,4 @@
+import torch
 from typing import List, Dict, Literal, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from numpy.typing import NDArray
@@ -6,8 +7,8 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 import warnings
 import numpy as np
 
-from .mega.config import Params
-from .llm_provider import LLMProvider
+from .mega.config import MegaConfig
+from .mad import MadConfig
 
 
 class OpenModelSelection(Enum):
@@ -25,16 +26,6 @@ class CloseModelSelection(Enum):
     gpt56_sol = "gpt-5.6-sol"
     gpt56_luna = "gpt-5.6-luna"
     gpt56_terra = "gpt-5.6-terra"
-
-
-@dataclass
-class LLMOut:
-    response: str
-    input_token: int
-    output_token: int
-    model_name: str
-    provider: str
-    reasoning_token: int = 0
 
 
 @dataclass
@@ -94,81 +85,6 @@ def default_prompt_methods() -> Dict[str, PromptMethod]:
         ),
         "few_shot_kate": PromptMethod("few-shots", "kate"),
     }
-
-
-@dataclass
-class MadConfig:
-    """Settings for the multi-agent debate method.
-
-    Parameters
-    ----------
-    llm : LLMProvider, optional
-        Model used by the debaters and the debate judge. None uses the
-        runner's predictor, so MAD and the prompting methods share a model.
-    references_path : str, default "./exports/references.json"
-        Output of build_references.py.
-    num_agents : int, default 5
-        Debaters, one per star rating from 1 up.
-    num_rounds : int, default 3
-        Debate rounds.
-    max_workers : int, default 4
-        Reviews debated in parallel. Use 1 for a local Hugging Face model.
-    """
-
-    llm: Optional[LLMProvider] = None
-    references_path: str = "./exports/references.json"
-    num_agents: int = 5
-    num_rounds: int = 3
-    max_workers: int = 4
-
-
-@dataclass
-class MegaConfig:
-    """Settings for the mega agent method.
-
-    Parameters
-    ----------
-    llm : LLMProvider, optional
-        Model used by every team member. None uses the runner's predictor.
-        Must be an "openai" provider: the agents rely on tool calling.
-        Its model name, token and temperature replace those in ``params``.
-    params : Params
-        Team settings (size, memory, rounds, timeout, reasoning effort, ...).
-    task_instruction : str
-        Task description given to the leader when it designs the team.
-    prompt_template : str
-        Per-review project input; must contain ``{review}``.
-    plan_path : str, default "./exports/mega_plan.txt"
-        Saved team plan; created on the first run and reused afterwards.
-    log_path : str, default "./exports/logs.out"
-        Log file.
-    run_dir : str, optional, default "./exports/mega_runs"
-        Folder for each review's files, transcript and result.
-    checkpoint_path : str, optional
-        Checkpoint CSV; gets a ``_seed<N>`` suffix so each seed has its own.
-    max_workers : int, default 4
-        Reviews processed in parallel.
-    progress : bool, default False
-        Print one line per finished review.
-    """
-
-    llm: Optional[LLMProvider] = None
-    params: Params = field(default_factory=Params)
-    task_instruction: str = (
-        "predict the overall star rating (1 to 5) a customer gave a product, using "
-        "only the text of their online review. Do not use any label or information "
-        "outside the review text as evidence. The final answer is an integer rating "
-        "with a brief evidence-based rationale."
-    )
-    prompt_template: str = (
-        "Score this customer online product review from 1-5: <review> {review} </review>"
-    )
-    plan_path: str = "./exports/mega_plan.txt"
-    log_path: str = "./exports/logs.out"
-    run_dir: Optional[str] = "./exports/mega_runs"
-    checkpoint_path: Optional[str] = None
-    max_workers: int = 4
-    progress: bool = False
 
 
 def classification_metrics(y_true, y_pred) -> Dict[str, float]:
@@ -396,3 +312,6 @@ class RunnerConfig:
     prompt_log: Literal["first", "all"] = "first"
     output_path: str = "./exports/method_comparison.xlsx"
     slice_path: Optional[str] = None
+    kate_model_path: str = "./transformer_models/bert"
+    kate_device: torch.device = torch.device("cuda")
+    kate_batch_size: int = 64

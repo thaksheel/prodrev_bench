@@ -1,4 +1,5 @@
 import torch
+from dataclasses import dataclass
 from typing import Literal, Dict, List
 from transformers import (
     AutoTokenizer,
@@ -14,7 +15,15 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseLLM
 
-from .utils import LLMOut
+
+@dataclass
+class LLMOut:
+    response: str
+    input_token: int
+    output_token: int
+    model_name: str
+    provider: str
+    reasoning_token: int = 0
 
 
 class ThinkingBudge(LogitsProcessor):
@@ -247,5 +256,3 @@ class LLMProvider:
             )
         else:
             return self.manual_build_prompt(messages)
-
-
