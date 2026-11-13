@@ -14,12 +14,15 @@ from .utils import (
     MadConfig, 
     MegaConfig,
     RunnerConfig, 
-)
+) 
+from .prompts import PromptStrategy, Prompt
 from .llm_provider import LLMProvider 
 from .review_judge import ReviewRatingJudge 
 from .runner import Runner
 
 __all__ = [
+    "Prompt",
+    "PromptStrategy",
     "Runner",
     "PromptMethod",
     "MadConfig",

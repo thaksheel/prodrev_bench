@@ -1,29 +1,22 @@
-"""
-Runner that evaluates several LLM methods for 1-5 star rating prediction on
-one balanced slice of a review dataset, and scores every method both against
-the author's ratings and against labels adjudicated by the LLM judge.
-
-Methods
--------
-prompt  single-call prompting strategies from prompts.py, run through LLMProvider
-mad     multi-agent debate (modules.mad_predict_re.Debate)
-mega    mega agent team (modules.mega_agent_re.Runner)
-"""
-
 import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 
 from src.prompts import Prompt, PromptStrategy, RatingReasoning
 from . import LLMProvider, ReviewRatingJudge, PromptMethod, RunnerConfig
+from modules.mad_predict_re import Debate
+from modules.mega_agent_re import MegaPrompt, MegaRunner
 
 METRICS = ["accuracy", "balanced_accuracy", "macro_f1", "mae", "rmse"]
+LABELS = [1, 2, 3, 4, 5]
+_EXCEL_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def parse_rating(text) -> float:
@@ -47,8 +40,61 @@ def parse_reasoning(text) -> Optional[str]:
     return None
 
 
+def per_label_accuracy(judged: pd.DataFrame) -> Dict[str, float]:
+    """Accuracy within each author rating, against author and adjudicated labels."""
+    rows = judged[judged["adjudicated_label"].notna()]
+    out = {}
+    for label in LABELS:
+        group = rows[rows["true"] == label]
+        if len(group) == 0:
+            out[f"acc_label{label}_human"] = np.nan
+            out[f"acc_label{label}_judge"] = np.nan
+            continue
+        pred = group["pred"].astype(int)
+        out[f"acc_label{label}_human"] = float(
+            (pred == group["true"].astype(int)).mean()
+        )
+        out[f"acc_label{label}_judge"] = float(
+            (pred == group["adjudicated_label"].astype(int)).mean()
+        )
+    return out
+
+
+def _column(values, n: int, blank) -> list:
+    if values is None:
+        return [blank] * n
+    return list(values)
+
+
+def _optional_column(df: pd.DataFrame, name: str) -> Optional[list]:
+    if name in df.columns:
+        return df[name].tolist()
+    return None
+
+
+def _seed_path(path: Optional[str], seed: int) -> Optional[str]:
+    if path is None:
+        return None
+    p = Path(path)
+    return str(p.with_name(f"{p.stem}_seed{seed}{p.suffix}"))
+
+
+def _excel_clean_value(value):
+    if isinstance(value, str):
+        return _EXCEL_ILLEGAL.sub("", value)
+    return value
+
+
+def _excel_clean(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for col in out.columns:
+        if out[col].dtype == object:
+            out[col] = out[col].map(_excel_clean_value)
+    return out
+
+
 class Runner:
-    """Evaluate prompting and agentic methods on one balanced slice.
+    """Evaluate prompting and agentic methods on one balanced sample per seed.
 
     Parameters
     ----------
@@ -61,22 +107,26 @@ class Runner:
 
     Attributes
     ----------
-    slice_ : pandas.DataFrame
-        The balanced slice of ``sample_size`` rows.
-    eval_df_ : pandas.DataFrame
-        The rows actually evaluated (the slice, or its balanced subset).
-    predictions_ : dict of str to pandas.DataFrame
-        Raw predictions per method.
-    judged_ : dict of str to pandas.DataFrame
-        Judge results per method.
+    slices_ : dict of int to pandas.DataFrame
+        The balanced sample for each seed.
+    pools_ : dict of int to pandas.DataFrame
+        The few-shot example pool for each seed (rows outside its sample).
+    predictions_ : dict of (int, str) to pandas.DataFrame
+        Raw predictions per seed and method.
+    judged_ : dict of (int, str) to pandas.DataFrame
+        Predictions plus judge results per seed and method.
+    prompts_ : list of dict
+        Prompts recorded per seed and method.
     comparison_ : pandas.DataFrame
-        One row per method with author-label and judge-label metrics.
+        One row per seed and method.
+    summary_ : pandas.DataFrame
+        Mean and standard deviation across seeds, one row per method.
     """
 
     def __init__(
         self,
-        predictor: "LLMProvider",
-        judge_provider: "LLMProvider",
+        predictor: LLMProvider,
+        judge_provider: LLMProvider,
         config: RunnerConfig,
     ):
         self.predictor = predictor
@@ -89,47 +139,61 @@ class Runner:
             id_col="sample_id",
         )
         self.judge = ReviewRatingJudge(judge_provider, judge_cfg)
-        self.predictions_: Dict[str, pd.DataFrame] = {}
-        self.judged_: Dict[str, pd.DataFrame] = {}
+
+        self.df_ = self._load_data()
+        self.slices_: Dict[int, pd.DataFrame] = {}
+        self.pools_: Dict[int, pd.DataFrame] = {}
+        for seed in config.seeds:
+            self.slices_[seed], self.pools_[seed] = self._draw_sample(seed)
+        if config.slice_path:
+            Path(config.slice_path).parent.mkdir(parents=True, exist_ok=True)
+            pd.concat(self.slices_.values()).to_csv(config.slice_path, index=False)
+
+        self.predictions_: Dict[Tuple[int, str], pd.DataFrame] = {}
+        self.judged_: Dict[Tuple[int, str], pd.DataFrame] = {}
+        self.prompts_: List[Dict[str, Any]] = []
         self.comparison_: Optional[pd.DataFrame] = None
-        self._load_data()
+        self.summary_: Optional[pd.DataFrame] = None
+
+        self._debate = None
+        self._mad_references = None
+        self._mega_runner = None
+        self._mega_task = None
 
     # ------------------------------------------------------------------ #
     # Data
     # ------------------------------------------------------------------ #
-    def _load_data(self) -> None:
+    def _load_data(self) -> pd.DataFrame:
         cfg = self.config
         df = pd.read_csv(cfg.data_path).dropna(subset=[cfg.review_col, cfg.rating_col])
         df[cfg.rating_col] = df[cfg.rating_col].astype(int)
+        return df
+
+    def _draw_sample(self, seed: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        cfg = self.config
         per_class = cfg.sample_size // 5
-
-        sl = (
-            df.groupby(cfg.rating_col, group_keys=False)
-            .sample(n=per_class, random_state=cfg.seed)
-            .sample(frac=1, random_state=cfg.seed)
+        sample = (
+            self.df_.groupby(cfg.rating_col, group_keys=False)
+            .sample(n=per_class, random_state=seed)
+            .sample(frac=1, random_state=seed)
         )
-        pool = df.drop(index=sl.index)
-        pool = pool[~pool[cfg.review_col].isin(set(sl[cfg.review_col]))]
+        pool = self.df_.drop(index=sample.index)
+        pool = pool[~pool[cfg.review_col].isin(set(sample[cfg.review_col]))]
         if cfg.fewshot_pool_size and len(pool) > cfg.fewshot_pool_size:
-            pool = pool.sample(n=cfg.fewshot_pool_size, random_state=cfg.seed)
+            pool = pool.sample(n=cfg.fewshot_pool_size, random_state=seed)
 
-        sl = sl.reset_index().rename(columns={"index": "source_index"})
-        sl.insert(0, "sample_id", [f"s{i:05d}" for i in range(len(sl))])
-        self.slice_ = sl
-        self.pool_ = pool.reset_index(drop=True)
-
-        if cfg.eval_limit:
-            ev = sl.groupby(cfg.rating_col, group_keys=False).head(cfg.eval_limit // 5)
-            self.eval_df_ = ev.sort_values("sample_id").reset_index(drop=True)
-        else:
-            self.eval_df_ = sl
-        if cfg.slice_path:
-            Path(cfg.slice_path).parent.mkdir(parents=True, exist_ok=True)
-            sl.to_csv(cfg.slice_path, index=False)
+        sample = sample.reset_index().rename(columns={"index": "source_index"})
+        sample.insert(
+            0, "sample_id", [f"seed{seed}_s{i:04d}" for i in range(len(sample))]
+        )
+        sample.insert(1, "seed", seed)
+        return sample, pool.reset_index(drop=True)
 
     def _frame(
         self,
+        seed: int,
         preds,
+        n_llm_calls=None,
         reasonings=None,
         in_tok=None,
         out_tok=None,
@@ -137,178 +201,266 @@ class Runner:
         errors=None,
     ) -> pd.DataFrame:
         cfg = self.config
-        n = len(self.eval_df_)
+        data = self.slices_[seed]
+        n = len(data)
+        pred = pd.to_numeric(pd.Series(list(preds)), errors="coerce")
+        pred = pred.where(pred.isin(LABELS))
         return pd.DataFrame(
             {
-                "sample_id": self.eval_df_["sample_id"],
-                "review": self.eval_df_[cfg.review_col],
-                "true": self.eval_df_[cfg.rating_col].astype(int),
-                "pred": pd.to_numeric(pd.Series(preds), errors="coerce").where(
-                    lambda s: s.isin([1, 2, 3, 4, 5])
-                ),
-                "reasoning": reasonings if reasonings is not None else [None] * n,
-                "input_tokens": in_tok if in_tok is not None else [np.nan] * n,
-                "output_tokens": out_tok if out_tok is not None else [np.nan] * n,
-                "duration": durations if durations is not None else [np.nan] * n,
-                "error": errors if errors is not None else [None] * n,
+                "seed": seed,
+                "sample_id": data["sample_id"],
+                "review": data[cfg.review_col],
+                "true": data[cfg.rating_col].astype(int),
+                "pred": pred,
+                "reasoning": _column(reasonings, n, None),
+                "n_llm_calls": _column(n_llm_calls, n, np.nan),
+                "input_tokens": _column(in_tok, n, np.nan),
+                "output_tokens": _column(out_tok, n, np.nan),
+                "duration": _column(durations, n, np.nan),
+                "error": _column(errors, n, None),
+            }
+        )
+
+    # ------------------------------------------------------------------ #
+    # Prompt log
+    # ------------------------------------------------------------------ #
+    def _record_prompt(
+        self,
+        seed: int,
+        method: str,
+        sample_id: str,
+        system: Optional[str],
+        user: Optional[str],
+        note: Optional[str] = None,
+    ) -> None:
+        self.prompts_.append(
+            {
+                "seed": seed,
+                "method": method,
+                "sample_id": sample_id,
+                "system": system,
+                "user": user,
+                "note": note,
             }
         )
 
     # ------------------------------------------------------------------ #
     # Prompting methods
     # ------------------------------------------------------------------ #
-    def run_prompt_method(self, name: str, method: PromptMethod) -> pd.DataFrame:
+    def _build_prompt(
+        self, method: PromptMethod, review: str, pool: pd.DataFrame, embeddings
+    ):
+        prompt = Prompt(
+            review=review,
+            chain_of_thought=method.chain_of_thought,
+            rreasoning=RatingReasoning[method.output_format],
+            num_examples=method.num_examples,
+        )
+        strategy = PromptStrategy(
+            prompt, method.strategy, pool, method.few_shots_type, embeddings=embeddings
+        )
+        if method.strategy == "zero-shot":
+            parts = strategy.zero_shot()
+        else:
+            parts = strategy.few_shots(pool)
+        messages = [
+            {"role": "system", "content": parts["system"]},
+            {"role": "user", "content": parts["user"]},
+        ]
+        return messages, strategy
 
-        fmt = RatingReasoning[method.output_format]
+    def _predict_one(
+        self, method: PromptMethod, review: str, pool: pd.DataFrame, embeddings
+    ) -> Dict[str, Any]:
+        start = time.time()
+        result = {
+            "pred": np.nan,
+            "reasoning": None,
+            "input_tokens": np.nan,
+            "output_tokens": np.nan,
+            "n_llm_calls": 0,
+            "duration": np.nan,
+            "error": None,
+            "messages": None,
+        }
+        try:
+            messages, _ = self._build_prompt(method, review, pool, embeddings)
+            result["messages"] = messages
+            result["n_llm_calls"] = 1
+            out = self.predictor.invoke(messages=messages)
+            result["pred"] = parse_rating(out.response)
+            result["reasoning"] = parse_reasoning(out.response)
+            result["input_tokens"] = out.input_token
+            result["output_tokens"] = out.output_token
+        except Exception as exc:
+            result["error"] = f"{type(exc).__name__}: {exc}"
+        result["duration"] = time.time() - start
+        return result
+
+    def run_prompt_method(
+        self, seed: int, name: str, method: PromptMethod
+    ) -> pd.DataFrame:
+        data = self.slices_[seed]
+        pool = self.pools_[seed]
+        reviews = data[self.config.review_col].tolist()
+
         embeddings = None
-
-        def build(review):
-            prompt = Prompt(
-                review=review,
-                chain_of_thought=method.chain_of_thought,
-                rreasoning=fmt,
-                num_examples=method.num_examples,
-            )
-            return PromptStrategy(
-                prompt,
-                method.strategy,
-                self.pool_,
-                method.few_shots_type,
-                embeddings=embeddings,
-            )
-
-        def predict(review):
-            t0 = time.time()
-            try:
-                ps = build(review)
-                obj = (
-                    ps.zero_shot()
-                    if method.strategy == "zero-shot"
-                    else ps.few_shots(self.pool_)
-                )
-                out = self.predictor.invoke(
-                    messages=[
-                        {"role": "system", "content": obj["system"]},
-                        {"role": "user", "content": obj["user"]},
-                    ]
-                )
-                return (
-                    parse_rating(out.response),
-                    parse_reasoning(out.response),
-                    out.input_token,
-                    out.output_token,
-                    time.time() - t0,
-                    None,
-                )
-            except Exception as exc:
-                return (
-                    np.nan,
-                    None,
-                    np.nan,
-                    np.nan,
-                    time.time() - t0,
-                    f"{type(exc).__name__}: {exc}",
-                )
-
-        reviews = self.eval_df_[self.config.review_col].tolist()
-        rows = []
         if method.strategy == "few-shots" and method.few_shots_type == "kate":
-            ps = build(reviews[0])
-            ps.few_shots(self.pool_)
-            embeddings = ps.embeddings
-        with ThreadPoolExecutor(max_workers=self.config.max_workers) as pool:
-            rows = list(pool.map(predict, reviews))
+            _, strategy = self._build_prompt(method, reviews[0], pool, None)
+            embeddings = strategy.embeddings
 
-        p, r, i, o, d, e = map(list, zip(*rows))
-        return self._frame(p, r, i, o, d, e)
+        with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
+            futures = [
+                executor.submit(self._predict_one, method, review, pool, embeddings)
+                for review in reviews
+            ]
+            results = [future.result() for future in futures]
+
+        if self.config.prompt_log == "all":
+            to_log = len(results)
+        else:
+            to_log = 1
+        for sample_id, result in zip(data["sample_id"][:to_log], results[:to_log]):
+            messages = result["messages"] or [{"content": None}, {"content": None}]
+            self._record_prompt(
+                seed, name, sample_id, messages[0]["content"], messages[1]["content"]
+            )
+
+        frame = pd.DataFrame(results)
+        return self._frame(
+            seed,
+            frame["pred"],
+            frame["n_llm_calls"],
+            frame["reasoning"],
+            frame["input_tokens"],
+            frame["output_tokens"],
+            frame["duration"],
+            frame["error"],
+        )
 
     # ------------------------------------------------------------------ #
     # Agentic methods
     # ------------------------------------------------------------------ #
-    def run_mad(self) -> pd.DataFrame:
-        from modules.mad_predict_re import Debate
+    def _get_debate(self) -> Debate:
+        if self._debate is None:
+            m = self.config.mad
+            with open(m.references_path, "r", encoding="utf-8") as f:
+                self._mad_references = json.load(f)
+            self._debate = Debate(
+                model_name=m.model_name,
+                device=m.device,
+                max_new_token=m.max_new_token,
+                num_agents=m.num_agents,
+                num_rounds=m.num_rounds,
+                references=self._mad_references,
+                provider=m.provider,
+                api_key=m.api_key,
+            )
+        return self._debate
 
+    def run_mad(self, seed: int) -> pd.DataFrame:
         m = self.config.mad
-        with open(m.references_path, "r", encoding="utf-8") as f:
-            references = json.load(f)
-        debate = Debate(
-            model_name=m.model_name,
-            device=m.device,
-            max_new_token=m.max_new_token,
-            num_agents=m.num_agents,
-            num_rounds=m.num_rounds,
-            references=references,
-            provider=m.provider,
-            api_key=m.api_key,
+        data = self.slices_[seed]
+        reviews = data[self.config.review_col].tolist()
+        debate = self._get_debate()
+
+        self._record_prompt(
+            seed,
+            "mad",
+            data["sample_id"].iloc[0],
+            system=json.dumps(self._mad_references, ensure_ascii=False),
+            user=reviews[0],
+            note=f"Debate builds its agent prompts internally; recorded here are its inputs "
+            f"(references and review) for {m.num_agents} agents over {m.num_rounds} rounds.",
         )
-        reviews = self.eval_df_[self.config.review_col].tolist()
-        t0 = time.time()
+
+        start = time.time()
         results, reasonings = debate.simulate_debate(reviews)
-        per_review = (time.time() - t0) / max(len(reviews), 1)
+        per_review = (time.time() - start) / max(len(reviews), 1)
         debate.save_reasoning()
+
+        n = len(reviews)
+        calls = [m.num_agents * m.num_rounds] * n
         return self._frame(
-            results, [str(r) for r in reasonings], durations=[per_review] * len(reviews)
+            seed,
+            results,
+            calls,
+            [str(r) for r in reasonings],
+            durations=[per_review] * n,
         )
 
-    def run_mega(self) -> pd.DataFrame:
-        from modules.mega_agent_re import MegaPrompt, Runner
+    def _get_mega_runner(self) -> MegaRunner:
+        if self._mega_runner is None:
+            m = self.config.mega
+            self._mega_task = MegaPrompt().get_mega_instructions(
+                m.params.ceo_name,
+                m.task_instruction,
+                max_agents=m.params.max_subordinates + 1,
+            )
+            self._mega_runner = MegaRunner(log_path=m.log_path, run_dir=m.run_dir)
+            if Path(m.plan_path).exists():
+                self._mega_runner.load_plan(m.plan_path)
+            else:
+                self._mega_runner.plan(m.params, self._mega_task)
+                self._mega_runner.save_plan(m.plan_path)
+        return self._mega_runner
 
+    def run_mega(self, seed: int) -> pd.DataFrame:
         m = self.config.mega
-        task = MegaPrompt().get_mega_instructions(
-            m.params.ceo_name,
-            m.task_instruction,
-            max_agents=m.params.max_subordinates + 1,
+        data = self.slices_[seed]
+        reviews = data[self.config.review_col].tolist()
+        runner = self._get_mega_runner()
+
+        self._record_prompt(
+            seed,
+            "mega",
+            data["sample_id"].iloc[0],
+            system=self._mega_task,
+            user=m.prompt_template.format(review=reviews[0]),
+            note="Task instruction and per-review prompt given to the team leader; "
+            "subordinate agents build their own prompts from these.",
         )
-        runner = Runner(log_path=m.log_path, run_dir=m.run_dir)
-        if Path(m.plan_path).exists():
-            runner.load_plan(m.plan_path)
-        else:
-            runner.plan(m.params, task)
-            runner.save_plan(m.plan_path)
 
         out = runner.run_many(
             m.params,
-            task,
-            self.eval_df_[self.config.review_col].tolist(),
-            trues=self.eval_df_[self.config.rating_col].to_numpy(),
+            self._mega_task,
+            reviews,
+            trues=data[self.config.rating_col].to_numpy(),
             prompt_template=m.prompt_template,
             max_workers=m.max_workers,
-            checkpoint_path=m.checkpoint_path,
+            checkpoint_path=_seed_path(m.checkpoint_path, seed),
         ).reset_index(drop=True)
-        col = lambda c: out[c].tolist() if c in out.columns else None
+
         return self._frame(
+            seed,
             out["pred"],
-            col("reasoning"),
-            col("total_input_token"),
-            col("total_output_token"),
-            col("duration"),
-            col("error"),
+            _optional_column(out, "n_llm_calls"),
+            _optional_column(out, "reasoning"),
+            _optional_column(out, "total_input_token"),
+            _optional_column(out, "total_output_token"),
+            _optional_column(out, "duration"),
+            _optional_column(out, "error"),
         )
 
     # ------------------------------------------------------------------ #
     # Evaluation
     # ------------------------------------------------------------------ #
-    def _judge_method(self, name: str, preds: pd.DataFrame) -> Dict[str, Any]:
+    def _judge_method(
+        self, seed: int, name: str, preds: pd.DataFrame
+    ) -> Dict[str, Any]:
         valid = preds[preds["pred"].notna()].copy()
         valid["pred"] = valid["pred"].astype(int)
         judged = self.judge.evaluate(valid) if len(valid) else valid
-        self.judged_[name] = preds.drop(columns=["pred"]).merge(
-            judged.drop(
-                columns=[
-                    "review",
-                    "true",
-                    "reasoning",
-                    "input_tokens",
-                    "output_tokens",
-                    "duration",
-                    "error",
-                ],
-                errors="ignore",
-            ),
-            on="sample_id",
-            how="left",
+
+        judge_columns = ["sample_id"] + [
+            c for c in judged.columns if c not in preds.columns
+        ]
+        self.judged_[(seed, name)] = preds.merge(
+            judged[judge_columns], on="sample_id", how="left"
         )
+
         row = {
+            "seed": seed,
             "method": name,
             "n": len(preds),
             "n_valid": len(valid),
@@ -316,30 +468,23 @@ class Runner:
         }
         if len(valid):
             metrics, counts = self.judge.summary(judged)
-            for m in METRICS:
-                row[f"{m}_human"] = metrics.loc[m, "original"]
-                row[f"{m}_judge"] = metrics.loc[m, "adjudicated"]
-            c = counts["value"]
-            row.update(
-                {
-                    k: c[k]
-                    for k in (
-                        "n_disagreements",
-                        "n_pred_favored",
-                        "n_true_favored",
-                        "n_ties",
-                        "n_errors",
-                        "n_labels_changed",
-                    )
-                }
-            )
-        row.update(
-            {
-                "mean_input_tokens": preds["input_tokens"].mean(),
-                "mean_output_tokens": preds["output_tokens"].mean(),
-                "mean_duration_s": preds["duration"].mean(),
-            }
-        )
+            for metric in METRICS:
+                row[f"{metric}_human"] = metrics.loc[metric, "original"]
+                row[f"{metric}_judge"] = metrics.loc[metric, "adjudicated"]
+            row.update(per_label_accuracy(judged))
+            for key in (
+                "n_disagreements",
+                "n_pred_favored",
+                "n_true_favored",
+                "n_ties",
+                "n_errors",
+                "n_labels_changed",
+            ):
+                row[key] = counts.loc[key, "value"]
+        row["mean_llm_calls"] = preds["n_llm_calls"].mean()
+        row["mean_input_tokens"] = preds["input_tokens"].mean()
+        row["mean_output_tokens"] = preds["output_tokens"].mean()
+        row["mean_duration_s"] = preds["duration"].mean()
         return row
 
     def available_methods(self) -> List[str]:
@@ -351,45 +496,67 @@ class Runner:
             names.append("mega")
         return names
 
-    def predict(self, name: str) -> pd.DataFrame:
-        """Run one method by name and return its predictions."""
+    def predict(self, seed: int, name: str) -> pd.DataFrame:
+        """Run one method by name on one seed's sample and return its predictions."""
         if name == "mad":
-            return self.run_mad()
+            return self.run_mad(seed)
         if name == "mega":
-            return self.run_mega()
-        return self.run_prompt_method(name, self.config.prompt_methods[name])
+            return self.run_mega(seed)
+        return self.run_prompt_method(seed, name, self.config.prompt_methods[name])
+
+    def _summarize(self, comparison: pd.DataFrame) -> pd.DataFrame:
+        grouped = comparison.drop(columns="seed").groupby("method", sort=False)
+        stats = grouped.agg(["mean", "std"])
+        stats.columns = [f"{column}_{stat}" for column, stat in stats.columns]
+        stats.insert(0, "n_seeds", grouped.size())
+        return stats
 
     def run(self, methods: Optional[List[str]] = None) -> pd.DataFrame:
-        """Run the selected methods (default: every configured one) and judge each."""
+        """Run the selected methods (default: every configured one) on every seed and judge each.
+
+        Returns the summary across seeds; per-seed rows are in ``comparison_``.
+        """
         if methods is None:
             methods = self.available_methods()
 
         rows = []
-        for name in methods:
-            print(f"[{name}] predicting {len(self.eval_df_)} reviews")
-            predictions = self.predict(name)
-            self.predictions_[name] = predictions
-            print(f"[{name}] judging")
-            rows.append(self._judge_method(name, predictions))
+        for seed in self.config.seeds:
+            for name in methods:
+                print(
+                    f"[seed {seed}] [{name}] predicting {len(self.slices_[seed])} reviews"
+                )
+                predictions = self.predict(seed, name)
+                self.predictions_[(seed, name)] = predictions
 
-        self.comparison_ = pd.DataFrame(rows).set_index("method")
-        return self.comparison_
+                print(f"[seed {seed}] [{name}] judging")
+                rows.append(self._judge_method(seed, name, predictions))
+
+        self.comparison_ = pd.DataFrame(rows)
+        self.summary_ = self._summarize(self.comparison_)
+        return self.summary_
 
     def save_excel(self, path: Optional[str] = None) -> Path:
-        """Sheet "comparison", sheet "eval_rows", then one sheet per method."""
+        """Sheets: summary, by_seed, prompts, samples, then one sheet per method (all seeds)."""
         path = Path(path or self.config.output_path).with_suffix(".xlsx")
         path.parent.mkdir(parents=True, exist_ok=True)
-        bad = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-        clean = lambda d: d.apply(
-            lambda c: (
-                c.map(lambda v: bad.sub("", v) if isinstance(v, str) else v)
-                if c.dtype == object
-                else c
-            )
-        )
+        method_names = list(dict.fromkeys(name for _, name in self.judged_))
+
         with pd.ExcelWriter(path) as xw:
-            self.comparison_.round(4).to_excel(xw, sheet_name="comparison")
-            clean(self.eval_df_).to_excel(xw, sheet_name="eval_rows", index=False)
-            for name, d in self.judged_.items():
-                clean(d).to_excel(xw, sheet_name=name[:31], index=False)
+            self.summary_.round(4).to_excel(xw, sheet_name="summary")
+            self.comparison_.round(4).to_excel(xw, sheet_name="by_seed", index=False)
+            _excel_clean(pd.DataFrame(self.prompts_)).to_excel(
+                xw, sheet_name="prompts", index=False
+            )
+            _excel_clean(pd.concat(self.slices_.values())).to_excel(
+                xw, sheet_name="samples", index=False
+            )
+            for name in method_names:
+                frames = [
+                    self.judged_[(seed, name)]
+                    for seed in self.config.seeds
+                    if (seed, name) in self.judged_
+                ]
+                _excel_clean(pd.concat(frames)).to_excel(
+                    xw, sheet_name=name[:31], index=False
+                )
         return path

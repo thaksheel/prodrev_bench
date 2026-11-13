@@ -9,11 +9,11 @@ from .llm_core import (
 from .llm import get_llm_response, build_tools 
 from .workspace import Workspace 
 from .agent import Session, Memory, Agent 
-from .main import Runner 
+from .main import MegaRunner 
 
 
 __all__ = [
-    "Runner",
+    "MegaRunner",
     "Session",
     "Memory",
     "Agent",

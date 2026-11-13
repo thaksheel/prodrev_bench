@@ -114,10 +114,11 @@ Important:
         end = out.rfind("}") + 1
         json_str = out[start:end]
         try: 
+            # TODO: source of error with wrong format --too simple 
             d = json.loads(json_str)
             final_cls, reasoning = int(d["Rating"]), d["Reason"]
             return final_cls, reasoning
-        except json.decoder.JSONDecoder: 
+        except: 
             print(f"---> `out` from final_judgement={out}")
             return None 
 

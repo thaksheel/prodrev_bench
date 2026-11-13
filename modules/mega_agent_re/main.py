@@ -34,7 +34,7 @@ class PlanError(RuntimeError):
     pass
 
 
-class Runner:
+class MegaRunner:
     """Runs the MegaAgent pipeline, one isolated Session per sample.
 
     The team plan (the leader's "recruit employees and write their prompts"

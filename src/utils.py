@@ -1,4 +1,4 @@
-from typing import List, Dict, Literal, Optional, Any 
+from typing import List, Dict, Literal, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from numpy.typing import NDArray
 from enum import Enum
@@ -312,7 +312,7 @@ class JudgeConfig:
 
 @dataclass
 class RunnerConfig:
-    """Settings for :class:`EvaluationRunner`.
+    """Settings for :class:`Runner`.
 
     Parameters
     ----------
@@ -322,41 +322,44 @@ class RunnerConfig:
         Column holding the review text.
     rating_col : str, default "rating"
         Column holding the 1-5 star rating.
-    sample_size : int, default 5000
-        Size of the balanced evaluation slice; each rating gets
-        ``sample_size // 5`` rows.
-    eval_limit : int, optional
-        Evaluate only a balanced subset of the slice of this size
-        (``eval_limit // 5`` rows per rating). None evaluates the whole slice.
+    sample_size : int, default 500
+        Reviews evaluated per seed, balanced across the five ratings
+        (``sample_size // 5`` per rating). Use a multiple of 5.
+    seeds : tuple of int, default (0, 1, ..., 9)
+        One balanced sample is drawn per seed. Every method runs on every
+        sample, and results are reported per seed and averaged across seeds.
     fewshot_pool_size : int, optional, default 2000
-        Rows outside the slice used as the few-shot example pool.
-        None uses every row outside the slice.
-    seed : int, default 42
-        Random seed for the slice and the few-shot pool.
+        Rows outside each seed's sample used as its few-shot example pool.
+        None uses every row outside the sample.
     prompt_methods : dict of str to PromptMethod
         Prompting methods to run, keyed by the name used in the results.
+        Do not use the names "mad" or "mega".
     mad : MadConfig, optional
         Multi-agent debate settings. None skips the method.
     mega : MegaConfig, optional
-        Mega agent settings. None skips the method.
+        Mega agent settings. None skips the method. A ``checkpoint_path``
+        gets a ``_seed<N>`` suffix so each seed has its own checkpoint.
     judge : JudgeConfig
         Settings for the LLM judge applied to every method.
     max_workers : int, default 4
         Reviews processed in parallel for prompting methods. Use 1 for a
         local Hugging Face model.
+    prompt_log : {"first", "all"}, default "first"
+        Prompts saved per seed and method: the first review's only, or
+        every review's.
     output_path : str, default "./exports/method_comparison.xlsx"
-        Workbook with the comparison table and per-method details.
+        Workbook with the summary, per-seed results, prompts, samples and
+        per-method details.
     slice_path : str, optional
-        Also save the evaluation slice as CSV here.
+        Also save every seed's sample to this CSV, with a ``seed`` column.
     """
 
     data_path: str
     review_col: str = "review"
     rating_col: str = "rating"
-    sample_size: int = 5000
-    eval_limit: Optional[int] = None
+    sample_size: int = 500
+    seeds: Tuple[int, ...] = tuple(range(10))
     fewshot_pool_size: Optional[int] = 2000
-    seed: int = 42
     prompt_methods: Dict[str, PromptMethod] = field(
         default_factory=default_prompt_methods
     )
@@ -364,5 +367,6 @@ class RunnerConfig:
     mega: Optional[MegaConfig] = None
     judge: JudgeConfig = field(default_factory=JudgeConfig)
     max_workers: int = 4
+    prompt_log: Literal["first", "all"] = "first"
     output_path: str = "./exports/method_comparison.xlsx"
     slice_path: Optional[str] = None

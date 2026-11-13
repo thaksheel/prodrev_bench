@@ -21,21 +21,22 @@ predictor = LLMProvider(
     model_name=llm_model,
     token=openai_key,
     temperature=1,
+    reasoning_effort="none", 
 )
 judge_provider = LLMProvider(
     provider="openai",
     model_name=llm_model,
     token=openai_key,
     temperature=1,
+    reasoning_effort="medium", 
 )
 
 config = RunnerConfig(
     data_path="./data/sr.csv",
-    sample_size=5000,
-    eval_limit=500,
-    seed=42,
+    sample_size=500,
+    seeds=[i for i in range(42, 42+10)],
     max_workers=4,
-    # prompt_methods={"zero-shot": None},
+    mad=None,
     mad=MadConfig(
         model_name=llm_model,
         provider="openai",
@@ -58,8 +59,7 @@ config = RunnerConfig(
         ),
     ),
     judge=JudgeConfig(tie_policy="signal", aggregation="strict"),
-    output_path="./exports/w45/method_comparison_test20.xlsx",
-    slice_path="./exports/w45/eval_slice_5000.csv",
+    output_path="./exports/w45/results_500_10_w46.xlsx", #results_samples_seeds
 )
 
 if __name__ == "__main__":
@@ -69,3 +69,5 @@ if __name__ == "__main__":
     print(comparison[["n_valid"] + cols].round(3).T)
     print("Saved to", runner.save_excel())
     print("END")
+
+# Checkpoint: mad_predict has error for json decoding in ./made_predict_re/agent.py ln 117
