@@ -12,6 +12,7 @@ from src import (
     Runner,
     RunnerConfig,
     MetaConfig,
+    PromptMethod,
 )
 from src.mega import Params
 
@@ -19,7 +20,7 @@ load_dotenv()
 openai_key = os.getenv("OPENAI_API_KEY")
 llm_model = CloseModelSelection.gpt6_luna.value
 
-TEST_RUN = True  # 20 reviews, first seed only; set False for the full run
+TEST_RUN = False
 
 predictor = LLMProvider(
     provider="openai",
@@ -41,6 +42,15 @@ config = RunnerConfig(
     sample_size=500,
     seeds=tuple(range(42, 42 + 10)),
     max_workers=4,
+    prompt_methods={
+        "zero_shot": PromptMethod("zero-shot"),
+        "zero_shot_cot": PromptMethod("zero-shot", chain_of_thought=True),
+        "few_shot_random": PromptMethod("few-shots", "random"),
+        "few_shot_random_cot": PromptMethod(
+            "few-shots", "random", chain_of_thought=True
+        ),
+        "few_shot_kate": PromptMethod("few-shots", "kate"),
+    },
     mad=MadConfig(
         references_path="./data/references.json",
         num_agents=5,
@@ -61,8 +71,8 @@ config = RunnerConfig(
         max_workers=4,
     ),
     meta=MetaConfig(
-        llm=predictor, 
-        max_steps=15, 
+        llm=predictor,
+        max_steps=15,
     ),
     judge=JudgeConfig(tie_policy="signal", aggregation="strict"),
     output_path="./exports/w46/results_500_10_w46.xlsx",

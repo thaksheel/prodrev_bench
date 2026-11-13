@@ -263,7 +263,9 @@ class Runner:
         if self._encoder is None:
             cfg = self.config
             self._encoder = BertEncoder(
-                cfg.kate_model_path, cfg.kate_device, cfg.kate_batch_size
+                model_path=cfg.kate_model_path,
+                device=cfg.kate_device,
+                batch_size=cfg.kate_batch_size,
             )
         return self._encoder
 

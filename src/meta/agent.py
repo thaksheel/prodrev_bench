@@ -1,15 +1,27 @@
-import random
-import re
-import time
-import zlib
+import random, re, time, zlib, json 
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..llm_provider import LLMProvider
 from ..prompts import KATEExamples
-from ..review_judge import _parse_json
 from . import prompts as P
 
 MAX_REVIEW_CHARS = 600
+
+
+def _parse_json(text: Optional[str]) -> Optional[dict]:
+    """Extract the first {...} block from an LLM response."""
+    if not text:
+        return None
+    text = re.sub(r"```(?:json)?", "", str(text))
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)  # reasoning models
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        obj = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 def strip_thinking(text) -> str:
