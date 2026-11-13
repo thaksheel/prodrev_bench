@@ -1,127 +1,91 @@
-from typing import Dict, List, Tuple
-import json
+import re
+from typing import Any, Dict, List
 
-from .llm_response import LLMResponse
+from ..llm_provider import LLMProvider
+
+
+def fill(template: str, **values: str) -> str:
+    for key, value in values.items():
+        template = template.replace(f"##{key}##", value)
+    return template
+
+
+def strip_thinking(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", str(text), flags=re.S).strip()
 
 
 class Agent:
+    """One debater that argues for a fixed star rating.
+
+    The agent keeps a single conversation across rounds, so in later rounds
+    it still sees the review, its earlier arguments and the rebuttals.
+
+    Parameters
+    ----------
+    agent_id : int
+        Position of the agent in the debate.
+    rating : int
+        Star rating the agent argues for.
+    instructions : str
+        System prompt; ``##reference##`` or ``##references##`` is replaced by ``reference``.
+    prompt_tmpl : str
+        First-round prompt; ``##text##`` is replaced by the review and
+        ``##reference##`` by ``reference``.
+    rebuttal_tmpl : str
+        Later-round prompt; ``##rebuddle##`` is replaced by the other agents' arguments.
+    reference : str
+        Description of reviews at this rating.
+    llm : LLMProvider
+        Model that generates the agent's arguments.
+    """
+
     def __init__(
         self,
-        agent_id: str,
-        total_rounds: int,
-        cls_lvl: int,
+        agent_id: int,
+        rating: int,
         instructions: str,
-        prompt_rebuddle_tmpl: str,
         prompt_tmpl: str,
-        references: str,
-        examples: List[str],
-        llm_responder: LLMResponse,
-    ) -> None:
-        self.cls_lvl = cls_lvl
-        self.prompt_tmpl = prompt_tmpl
-        self.prompt_rebuddle_tmpl = prompt_rebuddle_tmpl
-        self.instructions = instructions
-        self.references = references
-        self.examples = examples
+        rebuttal_tmpl: str,
+        reference: str,
+        llm: LLMProvider,
+    ):
         self.agent_id = agent_id
-        self.llm_responder = llm_responder
-
-        # null fields
+        self.rating = rating
+        self.prompt_tmpl = prompt_tmpl
+        self.rebuttal_tmpl = rebuttal_tmpl
+        self.reference = reference
+        self.llm = llm
+        system = fill(instructions, reference=reference, references=reference)
+        self.messages: List[Dict[str, str]] = [{"role": "system", "content": system}]
         self.opinions: List[str] = []
-        self.memory_collection: Dict[int, List[str]] = dict(
-            zip(
-                [i for i in range(total_rounds)],
-                [[] for _ in range(total_rounds)],
-            )
+        self.calls: List[Dict[str, Any]] = []
+
+    def open(self, text: str) -> str:
+        """First round: argue for this agent's rating."""
+        prompt = fill(
+            self.prompt_tmpl,
+            text=text,
+            reference=self.reference,
+            references=self.reference,
         )
+        return self._say(prompt)
 
-    def get_response(
-        self,
-        messages: List[Dict],
-    ) -> str:
-        response = self.llm_responder.response(messages)
-        return response
+    def rebut(self, others: str) -> str:
+        """Later rounds: agree with or rebut the other agents' arguments."""
+        return self._say(fill(self.rebuttal_tmpl, rebuddle=others))
 
-    def add_instruction(self, round_num: int, ins: str):
-        """Set instructions for the current task at hand, stored as `system`"""
-        prompt = self.instructions.replace("##reference##", self.references)
-        self.memory_collection[round_num].append(
-            {"role": "system", "content": f"{prompt}"}
+    def _say(self, content: str) -> str:
+        self.messages.append({"role": "user", "content": content})
+        sent = list(self.messages)
+        out = self.llm.invoke(messages=sent)
+        opinion = strip_thinking(out.response)
+        self.messages.append({"role": "assistant", "content": opinion})
+        self.opinions.append(opinion)
+        self.calls.append(
+            {
+                "label": f"agent {self.agent_id} ({self.rating}-star), round {len(self.opinions)}",
+                "messages": sent,
+                "out": out,
+            }
         )
-
-    def add_topic(self, text: str, round_num: int):
-        """Add prompts/events to generate a response by the LLM, stored at `user`"""
-        prompt = self.prompt_tmpl.replace("##text##", text)
-        self.memory_collection[round_num].append(
-            {"role": "user", "content": f"{prompt}"}
-        )
-
-    def add_rebuddle(self, rebuddle: str, round_num: int):
-        """Add prompts/events to generate a response by the LLM, stored at `user`"""
-        prompt = self.prompt_tmpl.replace("##rebuddle##", rebuddle)
-        self.memory_collection[round_num].append(
-            {"role": "user", "content": f"{prompt}"}
-        )
-
-    def add_opinion(self, opinion: str, round_num: int):
-        """Store the response by the LLMs as `assistant`"""
-        self.memory_collection[round_num].append(
-            {"role": "assistant", "content": f"{opinion}"}
-        )
-
-    def debate(self, text: str, rebuddle: str, round_num: int):
-        if round_num == 0:
-            self.add_instruction(round_num, text)
-            self.add_topic(text, round_num)
-            self.opinions.append(self.get_response(self.memory_collection[round_num]))
-            self.add_opinion(self.opinions[-1], round_num)
-        else:
-            self.add_instruction(round_num, text)
-            self.add_rebuddle(rebuddle, round_num)
-            self.opinions.append(self.get_response(self.memory_collection[round_num]))
-            self.add_opinion(self.opinions[-1], round_num)
-        return self.opinions[-1]
-
-    def final_judgement(self, text: str, history: str) -> Tuple[int, str]:
-        prompt = """You are the Sentiment Rating Judge. The debaters have completed their arguments.
-Review Text:
-"##text##"
-
-Debate History:
-##history##
-
-Your task:
-1. Evaluate all arguments from the debaters.
-2. Determine which star rating (1-5) is best supported by the evidence and reasoning.
-3. Provide a final judgment strictly in JSON format.
-
-JSON Output Format:
-{"Rating": <1-5>, "Reason": "<one-sentence explanation>"}
-
-Important:
-- The "Rating" must be a single integer from 1 to 5.
-- The "Reason" must be one concise sentence summarizing why that rating is correct.
-- Do NOT include any text outside the JSON object.
-"""
-        prompt = prompt.replace("##text##", text)
-        prompt = prompt.replace("##history##", history)
-        messages = [
-            {"role": "system", "content": "follow the given instructions."}, 
-            {"role": "user", "content": f"{prompt}"},
-        ]
-        out = self.get_response(messages)
-        start = out.find("{")
-        end = out.rfind("}") + 1
-        json_str = out[start:end]
-        try: 
-            # TODO: source of error with wrong format --too simple 
-            d = json.loads(json_str)
-            final_cls, reasoning = int(d["Rating"]), d["Reason"]
-            return final_cls, reasoning
-        except: 
-            print(f"---> `out` from final_judgement={out}")
-            return None 
-
-    def clear_memory(self):
-        self.memory_collection: Dict[int, List[str]] = {}
-        return self
+        return opinion

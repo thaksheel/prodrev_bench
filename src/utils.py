@@ -6,6 +6,8 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 import warnings
 import numpy as np
 
+from .llm_provider import LLMProvider
+
 
 class OpenModelSelection(Enum):
     tllama = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
@@ -31,6 +33,7 @@ class LLMOut:
     output_token: int
     model_name: str
     provider: str
+    reasoning_token: int = 0
 
 
 @dataclass
@@ -98,32 +101,24 @@ class MadConfig:
 
     Parameters
     ----------
-    model_name : str
-        Model used by every debate agent.
-    provider : str, default "openai"
-        Backend passed to ``Debate``.
-    api_key : str, optional
-        API key passed to ``Debate``.
-    device : str, default "cuda"
-        Device for local models.
-    max_new_token : int, default 1000
-        Generation budget per agent turn.
+    llm : LLMProvider, optional
+        Model used by the debaters and the debate judge. None uses the
+        runner's predictor, so MAD and the prompting methods share a model.
+    references_path : str, default "./exports/references.json"
+        Output of build_references.py.
     num_agents : int, default 5
-        Agents in the debate.
+        Debaters, one per star rating from 1 up.
     num_rounds : int, default 3
         Debate rounds.
-    references_path : str, default "./exports/references.json"
-        JSON file with the debate references.
+    max_workers : int, default 4
+        Reviews debated in parallel. Use 1 for a local Hugging Face model.
     """
 
-    model_name: str
-    provider: str = "openai"
-    api_key: Optional[str] = None
-    device: str = "cuda"
-    max_new_token: int = 1000
+    llm: Optional[LLMProvider] = None
+    references_path: str = "./exports/references.json"
     num_agents: int = 5
     num_rounds: int = 3
-    references_path: str = "./exports/references.json"
+    max_workers: int = 4
 
 
 @dataclass

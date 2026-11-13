@@ -1,5 +1,5 @@
 import torch
-from typing import Literal, Optional, Dict, Union, List
+from typing import Literal, Dict, List
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseLLM
 
-from . import LLMOut
+from .utils import LLMOut
 
 
 class ThinkingBudge(LogitsProcessor):

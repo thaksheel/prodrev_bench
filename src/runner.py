@@ -1,15 +1,18 @@
-import json, re, time 
+import json
+import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 
 from src.prompts import BertEncoder, KATEExamples, PromptBuilder, RandomExamples
-from .mad import Debate
-from .mega import MegaRunner, MegaPrompt
 from . import LLMProvider, ReviewRatingJudge, PromptMethod, RunnerConfig
+from .mad import Debate
+from modules.mega_agent_re import MegaPrompt, MegaRunner
 
 METRICS = ["accuracy", "balanced_accuracy", "macro_f1", "mae", "rmse"]
 LABELS = [1, 2, 3, 4, 5]
@@ -122,8 +125,8 @@ class Runner:
 
     def __init__(
         self,
-        predictor: LLMProvider,
-        judge_provider: LLMProvider,
+        predictor: "LLMProvider",
+        judge_provider: "LLMProvider",
         config: RunnerConfig,
     ):
         self.predictor = predictor
@@ -154,7 +157,6 @@ class Runner:
 
         self._encoder = None
         self._debate = None
-        self._mad_references = None
         self._mega_runner = None
         self._mega_task = None
 
@@ -242,6 +244,9 @@ class Runner:
             }
         )
 
+    # ------------------------------------------------------------------ #
+    # Prompting methods
+    # ------------------------------------------------------------------ #
     def _get_encoder(self) -> BertEncoder:
         if self._encoder is None:
             cfg = self.config
@@ -332,55 +337,54 @@ class Runner:
             frame["error"],
         )
 
-    # ------------------------------------------------------------------ #
-    # Agentic methods
-    # ------------------------------------------------------------------ #
     def _get_debate(self) -> Debate:
         if self._debate is None:
-            m = self.config.mad
-            with open(m.references_path, "r", encoding="utf-8") as f:
-                self._mad_references = json.load(f)
+            with open(self.config.mad.references_path, "r", encoding="utf-8") as f:
+                references = json.load(f)
             self._debate = Debate(
-                model_name=m.model_name,
-                device=m.device,
-                max_new_token=m.max_new_token,
-                num_agents=m.num_agents,
-                num_rounds=m.num_rounds,
-                references=self._mad_references,
-                provider=m.provider,
-                api_key=m.api_key,
+                self.config.mad.llm or self.predictor,
+                references,
+                self.config.mad.num_agents,
+                self.config.mad.num_rounds,
             )
         return self._debate
 
+    def _record_debate(
+        self, seed: int, sample_id: str, calls: List[Dict[str, Any]]
+    ) -> None:
+        for call in calls:
+            messages = call["messages"]
+            turns = "\n\n".join(
+                f"[{msg['role']}] {msg['content']}" for msg in messages[1:]
+            )
+            self._record_prompt(
+                seed, "mad", sample_id, messages[0]["content"], turns, call["label"]
+            )
+
     def run_mad(self, seed: int) -> pd.DataFrame:
-        m = self.config.mad
         data = self.slices_[seed]
         reviews = data[self.config.review_col].tolist()
-        debate = self._get_debate()
-
-        self._record_prompt(
-            seed,
-            "mad",
-            data["sample_id"].iloc[0],
-            system=json.dumps(self._mad_references, ensure_ascii=False),
-            user=reviews[0],
-            note=f"Debate builds its agent prompts internally; recorded here are its inputs "
-            f"(references and review) for {m.num_agents} agents over {m.num_rounds} rounds.",
+        results = self._get_debate().simulate_debate(
+            reviews, max_workers=self.config.mad.max_workers
         )
 
-        start = time.time()
-        results, reasonings = debate.simulate_debate(reviews)
-        per_review = (time.time() - start) / max(len(reviews), 1)
-        debate.save_reasoning()
+        if self.config.prompt_log == "all":
+            to_log = len(results)
+        else:
+            to_log = 1
+        for sample_id, result in zip(data["sample_id"][:to_log], results[:to_log]):
+            self._record_debate(seed, sample_id, result["calls"])
 
-        n = len(reviews)
-        calls = [m.num_agents * m.num_rounds] * n
+        frame = pd.DataFrame(results)
         return self._frame(
             seed,
-            results,
-            calls,
-            [str(r) for r in reasonings],
-            durations=[per_review] * n,
+            frame["rating"],
+            frame["n_llm_calls"],
+            frame["reasoning"],
+            frame["input_tokens"],
+            frame["output_tokens"],
+            frame["duration"],
+            frame["error"],
         )
 
     def _get_mega_runner(self) -> MegaRunner:

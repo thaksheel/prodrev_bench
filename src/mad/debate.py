@@ -1,116 +1,175 @@
-from tqdm import tqdm
-import torch
-from typing import Literal, Dict, List, Tuple
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Tuple
 
-from .agent import Agent
-from . import ApiResponse
-from .llm_response import LLMResponse
+from tqdm import tqdm
+
+from ..llm_provider import LLMProvider
+from ..review_judge import _parse_json
+from .agent import Agent, strip_thinking
+
+JUDGE_SYSTEM = "Follow the given instructions."
+JUDGE_PROMPT = """You are the Sentiment Rating Judge. The debaters have completed their arguments.
+Review Text:
+"##text##"
+
+Debate History:
+##history##
+
+Your task:
+1. Evaluate all arguments from the debaters.
+2. Determine which star rating (1-5) is best supported by the evidence and reasoning.
+3. Provide a final judgment strictly in JSON format.
+
+JSON Output Format:
+{"Rating": <1-5>, "Reason": "<one-sentence explanation>"}
+
+Important:
+- The "Rating" must be a single integer from 1 to 5.
+- The "Reason" must be one concise sentence summarizing why that rating is correct.
+- Do NOT include any text outside the JSON object.
+"""
+
+
+def parse_judgement(text: str) -> Tuple[Optional[int], Optional[str]]:
+    text = strip_thinking(text)
+    obj = _parse_json(text) or {}
+    rating = obj.get("Rating", obj.get("rating"))
+    reason = obj.get("Reason", obj.get("reason"))
+    if rating is None:
+        m = re.search(r'"?rating"?\s*[:=]\s*"?([1-5])', text, re.I)
+        rating = m.group(1) if m else None
+    m = re.search(r"[1-5]", str(rating)) if rating is not None else None
+    return (int(m.group()) if m else None), reason
 
 
 class Debate:
+    """Multi-agent debate for 1-5 star rating prediction.
+
+    One agent per star rating argues that the review deserves its rating.
+    In every round after the first, each agent sees the other agents'
+    previous arguments and agrees or rebuts. A judge then reads the full
+    debate and gives the final rating.
+
+    Parameters
+    ----------
+    llm : LLMProvider
+        Model used by every agent and the judge.
+    references : dict
+        Contents of references.json, with the lists ``instructions``,
+        ``prompt_template``, ``rebuddle_prompt_template`` and ``references``
+        (one entry per rating) and optionally ``rating``.
+    num_agents : int, default 5
+        Agents in the debate, one per rating from 1 up.
+    num_rounds : int, default 3
+        Debate rounds.
+
+    Notes
+    -----
+    Each review costs ``num_agents * num_rounds + 1`` LLM calls.
+    """
+
     def __init__(
         self,
-        model_name: str,
-        provider: Literal["openai", "anthropic", "open_weights", "gemini"],
-        device: Literal["cpu", "cuda"],
-        max_new_token: int,
-        num_agents: int,
-        num_rounds: int,
-        references: Dict[str, List[str]],
-        api_key: str = None, 
+        llm: LLMProvider,
+        references: Dict[str, Any],
+        num_agents: int = 5,
+        num_rounds: int = 3,
     ):
-        self.num_rounds = num_rounds
-        self.num_agents = num_agents
+        self.llm = llm
         self.references = references
-        self.provider = provider
-        # post init
-        if provider == "open_weights":
-            self.llm = LLMResponse(
-                model_name=model_name,
-                max_new_tokens=max_new_token,
-                device=torch.device(device),
-            )
-        else: 
-            self.llm = ApiResponse(
-                model_name=model_name, 
-                provider=provider, 
-                api_key=api_key,
-            )
-        # null fields
-        self.agents: List[Agent] = []
-        self.judge: Agent = None
+        self.num_agents = num_agents
+        self.num_rounds = num_rounds
 
-    def init_agent(self):
-        self.agents = [
+    def _make_agents(self) -> List[Agent]:
+        refs = self.references
+        ratings = refs.get("rating", list(range(1, self.num_agents + 1)))
+        return [
             Agent(
                 agent_id=i,
-                cls_lvl=i + 1,
-                instructions=self.references["instructions"][i],
-                prompt_rebuddle_tmpl=self.references["rebuddle_prompt_template"][i],
-                prompt_tmpl=self.references["prompt_template"][i],
-                references=self.references["references"][i],
-                examples=self.references["examples"][str(i + 1)],
-                llm_responder=self.llm,
-                total_rounds=self.num_rounds,
+                rating=int(ratings[i]),
+                instructions=refs["instructions"][i],
+                prompt_tmpl=refs["prompt_template"][i],
+                rebuttal_tmpl=refs["rebuddle_prompt_template"][i],
+                reference=refs["references"][i],
+                llm=self.llm,
             )
             for i in range(self.num_agents)
         ]
-        return self
 
-    def judgment(self, text: str) -> Tuple[int, str]:
-        history = ""
-        for r in range(self.num_rounds):
-            his = [
-                f"debater {agent.agent_id} opinion: {agent.opinions[r]}"
-                for agent in self.agents
+    @staticmethod
+    def _history(agents: List[Agent]) -> str:
+        lines = []
+        for r in range(max(len(a.opinions) for a in agents)):
+            lines.append(f"Round {r + 1}:")
+            for agent in agents:
+                if r < len(agent.opinions):
+                    lines.append(
+                        f"- Debater {agent.agent_id} (argues {agent.rating} stars): "
+                        f"{agent.opinions[r]}"
+                    )
+        return "\n".join(lines)
+
+    def run(self, text: str) -> Dict[str, Any]:
+        """Debate one review.
+
+        Returns
+        -------
+        dict
+            ``rating``, ``reasoning``, ``n_llm_calls``, ``input_tokens``,
+            ``output_tokens``, ``duration``, ``error`` and ``calls`` (every
+            call's label, messages and LLMOut).
+        """
+        start = time.time()
+        agents = self._make_agents()
+        judge_call = None
+        rating, reason, error = None, None, None
+        try:
+            for agent in agents:
+                agent.open(text)
+            for _ in range(1, self.num_rounds):
+                previous = [agent.opinions[-1] for agent in agents]
+                for agent in agents:
+                    others = " ".join(
+                        f"Debater {other.agent_id} ({other.rating}-star): {opinion}"
+                        for other, opinion in zip(agents, previous)
+                        if other is not agent
+                    )
+                    agent.rebut(others)
+
+            prompt = JUDGE_PROMPT.replace("##text##", text).replace(
+                "##history##", self._history(agents)
+            )
+            messages = [
+                {"role": "system", "content": JUDGE_SYSTEM},
+                {"role": "user", "content": prompt},
             ]
-            history += f"round {r} ".join(his)
-        judge = Agent(
-            agent_id=-1,
-            cls_lvl=1,
-            instructions=None,
-            prompt_tmpl=None,
-            prompt_rebuddle_tmpl=None,
-            references=None,
-            examples=None,
-            llm_responder=self.llm,
-            total_rounds=self.num_rounds,
-        )
-        judgement = judge.final_judgement(text, history)
-        if judgement is None: 
-            return None 
-        else: 
-            final_cls, reasoning = judgement[0], judgement[1]
-            return final_cls, reasoning
+            out = self.llm.invoke(messages=messages)
+            judge_call = {"label": "judge", "messages": messages, "out": out}
+            rating, reason = parse_judgement(out.response)
+            if rating is None:
+                error = f"Unparseable judgement: {str(out.response)[:200]!r}"
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
 
-    def start_debate(self, text: str):
-        self.init_agent()
-        for r in range(self.num_rounds):
-            rebuddle = None
-            for agent in self.agents:
-                if r > 0:
-                    rebuddle = [agent.opinions[-1] for agent in self.agents]
-                    rebuddle = " ".join(rebuddle)
-                a = agent.debate(text, round_num=r, rebuddle=rebuddle)
-        j = self.judgment(text)
-        if j is None: 
-            return None
-        else: 
-            return j[0], j[1]
+        calls = [call for agent in agents for call in agent.calls]
+        if judge_call is not None:
+            calls.append(judge_call)
+        return {
+            "rating": rating,
+            "reasoning": reason,
+            "n_llm_calls": len(calls),
+            "input_tokens": sum(call["out"].input_token or 0 for call in calls),
+            "output_tokens": sum(call["out"].output_token or 0 for call in calls),
+            "duration": time.time() - start,
+            "error": error,
+            "calls": calls,
+        }
 
-    def simulate_debate(self, sentences: List[str]):
-        results = []
-        reasonings = []
-        for text in tqdm(sentences):
-            j = self.start_debate(text)
-            if j is None: 
-                results.append(None)
-                reasonings.append(None)
-            else:
-                r, re = j[0], j[1]
-                results.append(r)
-                reasonings.append(re)
-        return results, reasonings
-
-    def save_reasoning(self):
-        pass
+    def simulate_debate(
+        self, texts: List[str], max_workers: int = 1
+    ) -> List[Dict[str, Any]]:
+        """Debate every review; reviews run in parallel when ``max_workers > 1``."""
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            return list(tqdm(pool.map(self.run, texts), total=len(texts)))

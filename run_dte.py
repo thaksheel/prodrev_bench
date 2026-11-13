@@ -6,7 +6,7 @@ import pickle
 from sklearn.model_selection import train_test_split
 
 from modules.debate_train_evolve import dte
-from quick_analysis import evaluate_ratings
+from temp.quick_analysis import evaluate_ratings
 
 df = pd.read_csv("./data/sr.csv")
 df = df.dropna(subset=["review"])
