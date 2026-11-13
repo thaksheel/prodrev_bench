@@ -11,6 +11,7 @@ from src import (
     MegaConfig,
     Runner,
     RunnerConfig,
+    MetaConfig,
 )
 from src.mega import Params
 
@@ -58,6 +59,10 @@ config = RunnerConfig(
         plan_path="./exports/w46/mega_plan.txt",
         checkpoint_path="./exports/w46/mega_checkpoint.csv",
         max_workers=4,
+    ),
+    meta=MetaConfig(
+        llm=predictor, 
+        max_steps=15, 
     ),
     judge=JudgeConfig(tie_policy="signal", aggregation="strict"),
     output_path="./exports/w46/results_500_10_w46.xlsx",

@@ -16,12 +16,15 @@ from .utils import (
 ) 
 from .mad import Debate, MadConfig
 from .mega import MegaRunner, MegaPrompt, MegaConfig
+from .meta import MetaConfig, MetaAgent
 from .prompts import BertEncoder, KATEExamples, PromptBuilder, RandomExamples
 from .llm_provider import LLMProvider, LLMOut
 from .review_judge import ReviewRatingJudge 
 from .runner import Runner
 
 __all__ = [
+    "MetaAgent",
+    "MetaConfig",
     "MegaPrompt",
     "MegaRunner",
     "Debate",

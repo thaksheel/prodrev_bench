@@ -38,8 +38,21 @@ from . import (
     BLIND_SECTION,
     BLIND_TEMPLATE,
     SYSTEM_PROMPT,
-    classification_metrics
+    classification_metrics,
 )
+
+JUDGE_COLUMNS = [
+    "judge_choice",
+    "tie_reason",
+    "votes_pred_first",
+    "votes_true_first",
+    "judge_rating",
+    "judge_confidence",
+    "judge_evidence",
+    "judge_reasoning",
+    "judge_input_tokens",
+    "judge_output_tokens",
+]
 
 
 def _format_anchors(anchors: Dict[int, Sequence[str]]) -> str:
@@ -278,6 +291,7 @@ class ReviewRatingJudge:
 
         with ThreadPoolExecutor(max_workers=cfg.max_workers) as pool:
             judged = pd.DataFrame(list(pool.map(judge_row, range(len(out)))))
+        judged = judged.reindex(columns=JUDGE_COLUMNS)
         out = pd.concat([out, judged], axis=1)
 
         choice = out["judge_choice"]

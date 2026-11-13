@@ -13,6 +13,7 @@ from src.prompts import BertEncoder, KATEExamples, PromptBuilder, RandomExamples
 from . import LLMProvider, ReviewRatingJudge, PromptMethod, RunnerConfig
 from .mad import Debate
 from .mega import MegaPrompt, MegaRunner
+from .meta import MetaAgent
 
 METRICS = ["accuracy", "balanced_accuracy", "macro_f1", "mae", "rmse"]
 LABELS = [1, 2, 3, 4, 5]
@@ -262,9 +263,7 @@ class Runner:
         if self._encoder is None:
             cfg = self.config
             self._encoder = BertEncoder(
-                model_path=cfg.kate_model_path,
-                device=cfg.kate_device,
-                batch_size=cfg.kate_batch_size,
+                cfg.kate_model_path, cfg.kate_device, cfg.kate_batch_size
             )
         return self._encoder
 
@@ -459,6 +458,62 @@ class Runner:
             out["error"],
         )
 
+    def run_meta(self, seed: int) -> pd.DataFrame:
+        m = self.config.meta
+        cfg = self.config
+        data = self.slices_[seed]
+        searcher = None
+        if m.use_search:
+            searcher = KATEExamples(
+                self.pools_[seed],
+                self._get_encoder(),
+                m.search_topk,
+                cfg.review_col,
+                cfg.rating_col,
+            )
+        agent = MetaAgent(
+            m.llm or self.predictor,
+            m.auxiliary_llm,
+            searcher,
+            use_reflection=m.use_reflection,
+            use_experience=m.use_experience,
+            max_steps=m.max_steps,
+            max_help=m.max_help,
+            max_reflections=m.max_reflections,
+            max_retries=m.max_retries,
+            seed=seed,
+        )
+        reviews = data[cfg.review_col].tolist()
+        trues = data[cfg.rating_col].astype(int).tolist()
+
+        if m.use_experience:
+            results, experience = [], []
+            for review, true in zip(reviews, trues):
+                result = agent.run(review, true, experience[-1:])
+                if result["experience"]:
+                    experience.append((review, result["experience"]))
+                results.append(result)
+        else:
+            with ThreadPoolExecutor(max_workers=m.max_workers) as executor:
+                results = list(executor.map(agent.run, reviews))
+
+        log_ids = set(self._ids_to_log(data))
+        for sample_id, result in zip(data["sample_id"], results):
+            if sample_id in log_ids:
+                self._record_calls(seed, "meta", sample_id, result["calls"])
+
+        frame = pd.DataFrame(results)
+        return self._frame(
+            seed,
+            frame["rating"],
+            frame["n_llm_calls"],
+            frame["reasoning"],
+            frame["input_tokens"],
+            frame["output_tokens"],
+            frame["duration"],
+            frame["error"],
+        )
+
     # ------------------------------------------------------------------ #
     # Evaluation
     # ------------------------------------------------------------------ #
@@ -511,6 +566,8 @@ class Runner:
             names.append("mad")
         if self.config.mega is not None:
             names.append("mega")
+        if self.config.meta is not None:
+            names.append("meta")
         return names
 
     def predict(self, seed: int, name: str) -> pd.DataFrame:
@@ -519,6 +576,8 @@ class Runner:
             return self.run_mad(seed)
         if name == "mega":
             return self.run_mega(seed)
+        if name == "meta":
+            return self.run_meta(seed)
         return self.run_prompt_method(seed, name, self.config.prompt_methods[name])
 
     def _summarize(self, comparison: pd.DataFrame) -> pd.DataFrame:

@@ -9,6 +9,7 @@ import numpy as np
 
 from .mega.config import MegaConfig
 from .mad import MadConfig
+from .meta import MetaConfig
 
 
 class OpenModelSelection(Enum):
@@ -275,12 +276,13 @@ class RunnerConfig:
         None uses every row outside the sample.
     prompt_methods : dict of str to PromptMethod
         Prompting methods to run, keyed by the name used in the results.
-        Do not use the names "mad" or "mega".
+        Do not use the names "mad", "mega" or "meta".
     mad : MadConfig, optional
         Multi-agent debate settings. None skips the method.
     mega : MegaConfig, optional
-        Mega agent settings. None skips the method. A ``checkpoint_path``
-        gets a ``_seed<N>`` suffix so each seed has its own checkpoint.
+        Mega agent settings. None skips the method.
+    meta : MetaConfig, optional
+        Meta agent settings. None skips the method.
     judge : JudgeConfig
         Settings for the LLM judge applied to every method.
     max_workers : int, default 4
@@ -289,6 +291,12 @@ class RunnerConfig:
     prompt_log : {"first", "all"}, default "first"
         Prompts saved per seed and method: the first review's only, or
         every review's.
+    kate_model_path : str, default "./transformer_models/bert"
+        Encoder for KATE example selection; loaded once per run.
+    kate_device : str, optional
+        "cuda" or "cpu" for the encoder. Defaults to CUDA when available.
+    kate_batch_size : int, default 64
+        Reviews embedded per batch.
     output_path : str, default "./exports/method_comparison.xlsx"
         Workbook with the summary, per-seed results, prompts, samples and
         per-method details.
@@ -307,11 +315,13 @@ class RunnerConfig:
     )
     mad: Optional[MadConfig] = None
     mega: Optional[MegaConfig] = None
+    meta: Optional[MetaConfig] = None
     judge: JudgeConfig = field(default_factory=JudgeConfig)
     max_workers: int = 4
     prompt_log: Literal["first", "all"] = "first"
-    output_path: str = "./exports/method_comparison.xlsx"
-    slice_path: Optional[str] = None
     kate_model_path: str = "./transformer_models/bert"
     kate_device: torch.device = torch.device("cuda")
     kate_batch_size: int = 64
+    output_path: str = "./exports/method_comparison.xlsx"
+    slice_path: Optional[str] = None
+
