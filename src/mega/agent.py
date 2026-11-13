@@ -4,39 +4,18 @@ import time
 import uuid
 from typing import Dict, List, Optional
 
-from . import Params, build_tools, get_llm_response, Workspace
-
-NO_CALL_MSG = (
-    "[System] Error: respond only with function calls. "
-    "If you have nothing left to do, call terminate."
+from .config import Params
+from .llm import build_tools, get_llm_response
+from .prompts import (
+    COMMON_RULES,
+    LEADER_DELEGATE,
+    LEADER_PARALLEL,
+    MEMBER_RULES,
+    NO_CALL_MSG,
 )
+from .workspace import Workspace
+
 MAX_TOOL_OUTPUT = 1500
-
-
-COMMON_RULES = (
-    "Respond ONLY with function calls, never plain text. Be brief: keep talk "
-    "messages under 60 words. Files are shared by the whole team."
-)
-LEADER_PARALLEL = (
-    "How this project runs: your employees start immediately and their reports "
-    "are delivered to you as messages. Do not redo their work. Once you have "
-    "their reports, decide the final answer and call submit_rating(rating, "
-    "reasoning); it records review.txt for you and ends the project. Only talk "
-    "to an employee if a report is missing or unclear, then call terminate to "
-    "wait for the reply."
-)
-LEADER_DELEGATE = (
-    "How this project runs: assign work with talk, then call terminate to wait; "
-    "replies wake you up. When you have what you need, call submit_rating("
-    "rating, reasoning); it records review.txt for you and ends the project."
-)
-MEMBER_RULES = (
-    "How to work: the project input is already above, so you do not need to "
-    "read it from a file. Do your job, then send your result with talk (to "
-    "whoever your instructions name, otherwise to {leader}) and call terminate "
-    "in the same response. If your instructions mention writing a file, also "
-    "put the key result in your talk message so nobody has to open the file."
-)
 
 
 def _clip(text, limit: int = MAX_TOOL_OUTPUT) -> str:
@@ -48,10 +27,24 @@ def _clip(text, limit: int = MAX_TOOL_OUTPUT) -> str:
 
 
 class Session:
-    """Everything that belongs to one sample's run."""
+    """Everything that belongs to one review's run.
+
+    Parameters
+    ----------
+    params : Params
+    task_context : str
+        The project input shared with the whole team (the review prompt).
+    sample_id : str, optional
+    record : bool, default False
+        Keep every request sent to the model in ``requests``.
+    """
 
     def __init__(
-        self, params: Params, task_context: str, sample_id: Optional[str] = None
+        self,
+        params: Params,
+        task_context: str,
+        sample_id: Optional[str] = None,
+        record: bool = False,
     ):
         self.params = params
         self.task_context = task_context
@@ -67,6 +60,8 @@ class Session:
         self._events: List[dict] = []
         self._events_lock = threading.Lock()
         self._chroma = None
+        self.record = record
+        self.requests: List[dict] = []
 
     # ---- lifecycle -------------------------------------------------------
     def submit(self, rating: int, reasoning: str, by: str) -> bool:
@@ -157,6 +152,10 @@ class Session:
             ]
         with self._events_lock:
             self._events.append(event)
+
+    def record_request(self, label: str, messages: List[dict]) -> None:
+        with self._events_lock:
+            self.requests.append({"label": label, "messages": messages})
 
     def transcript(self) -> List[dict]:
         with self._events_lock:
@@ -309,6 +308,11 @@ class Agent(Memory):
 
     # ---- one wake-up -----------------------------------------------------
     def _call(self, req: List[dict]) -> dict:
+        if self.session.record:
+            role = " (leader)" if self.is_leader else ""
+            self.session.record_request(
+                f"{self.name}{role}, call {self.n_calls + 1}", list(req)
+            )
         out = get_llm_response(
             req,
             self.params,
@@ -319,7 +323,7 @@ class Agent(Memory):
         self.total_input_token += out.input_token
         self.total_output_token += out.output_token
         self.n_calls += 1
-        return out.response["choices"][0]["message"]
+        return out.response
 
     def _handle(self, batch: List[dict]) -> None:
         req = self.get(self.params.max_memory)

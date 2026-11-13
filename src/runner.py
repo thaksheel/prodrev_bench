@@ -12,7 +12,7 @@ import pandas as pd
 from src.prompts import BertEncoder, KATEExamples, PromptBuilder, RandomExamples
 from . import LLMProvider, ReviewRatingJudge, PromptMethod, RunnerConfig
 from .mad import Debate
-from modules.mega_agent_re import MegaPrompt, MegaRunner
+from .mega import MegaPrompt, MegaRunner
 
 METRICS = ["accuracy", "balanced_accuracy", "macro_f1", "mae", "rmse"]
 LABELS = [1, 2, 3, 4, 5]
@@ -70,6 +70,17 @@ def _optional_column(df: pd.DataFrame, name: str) -> Optional[list]:
     if name in df.columns:
         return df[name].tolist()
     return None
+
+
+def _format_turns(messages: List[Dict[str, Any]]) -> str:
+    parts = []
+    for msg in messages:
+        text = msg.get("content") or ""
+        for call in msg.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            text += f"\n<call {fn.get('name')}({fn.get('arguments')})>"
+        parts.append(f"[{msg.get('role')}] {text.strip()}")
+    return "\n\n".join(parts)
 
 
 def _seed_path(path: Optional[str], seed: int) -> Optional[str]:
@@ -337,29 +348,35 @@ class Runner:
             frame["error"],
         )
 
+    # ------------------------------------------------------------------ #
+    # Agentic methods
+    # ------------------------------------------------------------------ #
     def _get_debate(self) -> Debate:
         if self._debate is None:
-            with open(self.config.mad.references_path, "r", encoding="utf-8") as f:
+            m = self.config.mad
+            with open(m.references_path, "r", encoding="utf-8") as f:
                 references = json.load(f)
             self._debate = Debate(
-                self.config.mad.llm or self.predictor,
-                references,
-                self.config.mad.num_agents,
-                self.config.mad.num_rounds,
+                m.llm or self.predictor, references, m.num_agents, m.num_rounds
             )
         return self._debate
 
-    def _record_debate(
-        self, seed: int, sample_id: str, calls: List[Dict[str, Any]]
+    def _record_calls(
+        self, seed: int, method: str, sample_id: str, calls: List[Dict[str, Any]]
     ) -> None:
         for call in calls:
             messages = call["messages"]
-            turns = "\n\n".join(
-                f"[{msg['role']}] {msg['content']}" for msg in messages[1:]
-            )
+            system = None
+            if messages and messages[0]["role"] == "system":
+                system, messages = messages[0]["content"], messages[1:]
             self._record_prompt(
-                seed, "mad", sample_id, messages[0]["content"], turns, call["label"]
+                seed, method, sample_id, system, _format_turns(messages), call["label"]
             )
+
+    def _ids_to_log(self, data: pd.DataFrame) -> List[str]:
+        if self.config.prompt_log == "all":
+            return data["sample_id"].tolist()
+        return data["sample_id"].tolist()[:1]
 
     def run_mad(self, seed: int) -> pd.DataFrame:
         data = self.slices_[seed]
@@ -368,12 +385,10 @@ class Runner:
             reviews, max_workers=self.config.mad.max_workers
         )
 
-        if self.config.prompt_log == "all":
-            to_log = len(results)
-        else:
-            to_log = 1
-        for sample_id, result in zip(data["sample_id"][:to_log], results[:to_log]):
-            self._record_debate(seed, sample_id, result["calls"])
+        log_ids = set(self._ids_to_log(data))
+        for sample_id, result in zip(data["sample_id"], results):
+            if sample_id in log_ids:
+                self._record_calls(seed, "mad", sample_id, result["calls"])
 
         frame = pd.DataFrame(results)
         return self._frame(
@@ -395,49 +410,51 @@ class Runner:
                 m.task_instruction,
                 max_agents=m.params.max_subordinates + 1,
             )
-            self._mega_runner = MegaRunner(log_path=m.log_path, run_dir=m.run_dir)
+            self._mega_runner = MegaRunner(
+                m.params,
+                m.llm or self.predictor,
+                log_path=m.log_path,
+                run_dir=m.run_dir,
+            )
             if Path(m.plan_path).exists():
                 self._mega_runner.load_plan(m.plan_path)
             else:
-                self._mega_runner.plan(m.params, self._mega_task)
+                self._mega_runner.plan(self._mega_task)
                 self._mega_runner.save_plan(m.plan_path)
         return self._mega_runner
 
     def run_mega(self, seed: int) -> pd.DataFrame:
         m = self.config.mega
         data = self.slices_[seed]
-        reviews = data[self.config.review_col].tolist()
         runner = self._get_mega_runner()
-
-        self._record_prompt(
-            seed,
-            "mega",
-            data["sample_id"].iloc[0],
-            system=self._mega_task,
-            user=m.prompt_template.format(review=reviews[0]),
-            note="Task instruction and per-review prompt given to the team leader; "
-            "subordinate agents build their own prompts from these.",
-        )
+        log_ids = self._ids_to_log(data)
 
         out = runner.run_many(
-            m.params,
             self._mega_task,
-            reviews,
+            data[self.config.review_col].tolist(),
             trues=data[self.config.rating_col].to_numpy(),
+            sample_ids=data["sample_id"].tolist(),
             prompt_template=m.prompt_template,
             max_workers=m.max_workers,
             checkpoint_path=_seed_path(m.checkpoint_path, seed),
+            progress=m.progress,
+            record_ids=log_ids,
         ).reset_index(drop=True)
+
+        for sample_id in log_ids:
+            self._record_calls(
+                seed, "mega", sample_id, runner.calls_.pop(sample_id, [])
+            )
 
         return self._frame(
             seed,
             out["pred"],
-            _optional_column(out, "n_llm_calls"),
-            _optional_column(out, "reasoning"),
-            _optional_column(out, "total_input_token"),
-            _optional_column(out, "total_output_token"),
-            _optional_column(out, "duration"),
-            _optional_column(out, "error"),
+            out["n_llm_calls"],
+            out["reasoning"],
+            out["total_input_token"],
+            out["total_output_token"],
+            out["duration"],
+            out["error"],
         )
 
     # ------------------------------------------------------------------ #

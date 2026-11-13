@@ -2,68 +2,112 @@ import csv
 import json
 import logging
 import re
-import pandas as pd
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Collection, Dict, List, Optional, Sequence, Tuple
 
-from . import Session, MASOut, Params, get_llm_response
+import pandas as pd
+
+from .agent import Session
+from .config import MASOut, Params
+from .llm import get_llm_response
+from .prompts import (
+    KICKOFF_LEADER,
+    KICKOFF_MEMBER,
+    NUDGE_LEADER,
+    PLAN_REQUEST,
+    RELEASE_LEADER,
+    TODO_REMINDER,
+)
+
+if TYPE_CHECKING:
+    from ..llm_provider import LLMProvider
 
 logger = logging.getLogger("mega_agent")
-
-KICKOFF_MEMBER = "[System] The project has started. Do your job now."
-KICKOFF_LEADER = "[System] The project has started. Delegate the work now."
-RELEASE_LEADER = (
-    "[System] All employees have finished; their reports are in the messages "
-    "above. Decide the final rating and call submit_rating."
-)
-NUDGE_LEADER = (
-    "[System] Everyone is idle and no rating has been submitted. If you are "
-    "missing a report, talk to that employee; otherwise call submit_rating now."
-)
-TODO_REMINDER = (
-    "[System] Other agents have finished, but your TODO list is not empty. "
-    "Finish it and clear it, or remind whoever you are waiting for."
-)
 
 
 class PlanError(RuntimeError):
     pass
 
 
-class MegaRunner:
-    """Runs the MegaAgent pipeline, one isolated Session per sample.
+def params_from_provider(params: Params, llm: Optional["LLMProvider"]) -> Params:
+    """Copy the model, token and temperature of an LLMProvider into Params."""
+    if llm is None:
+        return params
+    if llm.provider != "openai":
+        raise ValueError(
+            f"The mega agent needs an OpenAI-compatible model with tool calling; "
+            f"got provider {llm.provider!r}."
+        )
+    effort = getattr(llm, "reasoning_effort", None) or params.reasoning_effort
+    return replace(
+        params,
+        model=llm.model_name,
+        api_key=llm.token,
+        temperature=llm.temperature,
+        reasoning_effort=effort,
+    )
 
-    The team plan (the leader's "recruit employees and write their prompts"
-    call) depends only on the task, not on the review, so it is generated
-    once and reused for every sample: one fewer LLM call per sample, and the
-    same team structure every time, which keeps predictions comparable.
+
+class MegaRunner:
+    """Runs the mega agent team, one isolated Session per review.
+
+    The team plan (the leader's one-off call that recruits employees and
+    writes their prompts) depends only on the task, so it is made once and
+    reused for every review.
+
+    Parameters
+    ----------
+    params : Params
+        Team settings.
+    llm : LLMProvider, optional
+        Model to use. Its model name, token and temperature (and
+        ``reasoning_effort``, if it has one) replace those in ``params``.
+        Must be an "openai" provider: the agents rely on OpenAI-style tool calls.
+    log_path : str, default "./exports/logs.out"
+        Log file.
+    run_dir : str, optional, default "./exports/mega_runs"
+        Folder for each review's files, transcript and result. None saves nothing.
+    display : bool, default False
+        Also print the log.
+
+    Attributes
+    ----------
+    plan_text : str or None
+        The team plan.
+    plan_input_token, plan_output_token : int
+        Tokens spent on planning.
+    calls_ : dict of str to list of dict
+        Every request (label and messages) for the reviews named in
+        ``run_many(record_ids=...)``.
     """
 
     def __init__(
         self,
+        params: Params,
+        llm: Optional["LLMProvider"] = None,
         log_path: str = "./exports/logs.out",
-        display: bool = False,
         run_dir: Optional[str] = "./exports/mega_runs",
+        display: bool = False,
     ):
+        self.params = params_from_provider(params, llm)
         self.log_path = log_path
         self.display = display
         self.run_dir = Path(run_dir) if run_dir else None
         self.plan_text: Optional[str] = None
         self.plan_input_token = 0
         self.plan_output_token = 0
+        self.calls_: Dict[str, List[dict]] = {}
         self._plan_key: Optional[str] = None
         self._plan_lock = threading.Lock()
         self._ckpt_lock = threading.Lock()
-        self.init_logger()
+        self._calls_lock = threading.Lock()
+        self._init_logger()
 
-    # ---- logging ---------------------------------------------------------
-    def init_logger(self):
-        # One named logger, configured once. Nothing is opened per sample,
-        # so there are no lingering handles on log files.
+    def _init_logger(self) -> None:
         if logger.handlers:
             return
         Path(self.log_path).parent.mkdir(parents=True, exist_ok=True)
@@ -78,8 +122,10 @@ class MegaRunner:
         logger.setLevel(logging.INFO)
         logger.propagate = False
 
-    # ---- planning --------------------------------------------------------
-    def plan(self, params: Params, task_instruction: str, force: bool = False) -> str:
+    # ------------------------------------------------------------------ #
+    # Planning
+    # ------------------------------------------------------------------ #
+    def plan(self, task_instruction: str, force: bool = False) -> str:
         with self._plan_lock:
             reusable = self.plan_text is not None and self._plan_key in (
                 None,
@@ -89,17 +135,14 @@ class MegaRunner:
                 return self.plan_text
             messages = [
                 {"role": "system", "content": task_instruction},
-                {
-                    "role": "user",
-                    "content": "Create the agents and assign the tasks for them.",
-                },
+                {"role": "user", "content": PLAN_REQUEST},
             ]
             for attempt in range(2):
-                out = get_llm_response(messages, params, enable_tools=False)
+                out = get_llm_response(messages, self.params, enable_tools=False)
                 self.plan_input_token += out.input_token
                 self.plan_output_token += out.output_token
-                text = out.message or ""
-                if len(self.parse_plan(text, params)) >= 2:
+                text = out.response.get("content") or ""
+                if len(self.parse_plan(text)) >= 2:
                     self.plan_text, self._plan_key = text, task_instruction
                     logger.info(f"Team plan:\n{text}")
                     return text
@@ -113,14 +156,13 @@ class MegaRunner:
         Path(path).write_text(self.plan_text or "", encoding="utf-8")
 
     def load_plan(self, path: str) -> str:
-        """Reuse a saved plan (any task_instruction) for reproducible reruns."""
+        """Reuse a saved plan for reproducible reruns."""
         self.plan_text = Path(path).read_text(encoding="utf-8")
         self._plan_key = None
         return self.plan_text
 
-    @staticmethod
-    def parse_plan(text: str, params: Params) -> List[Tuple[str, str]]:
-        """Return [(name, prompt)], leader first, at most max_subordinates others."""
+    def parse_plan(self, text: str) -> List[Tuple[str, str]]:
+        """Return [(name, prompt)], leader first, at most ``max_subordinates`` others."""
         found, seen = [], set()
         for raw, prompt in re.findall(
             r'<agent name="([^"]+)">(.*?)</agent>', text or "", re.DOTALL
@@ -129,41 +171,46 @@ class MegaRunner:
             if name and name.lower() not in seen and prompt.strip():
                 seen.add(name.lower())
                 found.append((name, prompt.strip()))
-        ceo = params.ceo_name
+        ceo = self.params.ceo_name
         leader = [(ceo, p) for n, p in found if n.lower() == ceo.lower()]
         if not leader:
             leader = [
                 (
                     ceo,
-                    f"You are {ceo}, the leader. Collect your employees' reports and make the final decision.",
+                    f"You are {ceo}, the leader. Collect your employees' reports "
+                    f"and make the final decision.",
                 )
             ]
         members = [(n, p) for n, p in found if n.lower() != ceo.lower()][
-            : params.max_subordinates
+            : self.params.max_subordinates
         ]
         return leader + members
 
-    # ---- one sample ------------------------------------------------------
+    # ------------------------------------------------------------------ #
+    # One review
+    # ------------------------------------------------------------------ #
     def run(
         self,
-        param: Params,
         task_instruction: str,
         prompt: str,
         true: Optional[int] = None,
         sample_id: Optional[str] = None,
         review: str = "",
+        record: bool = False,
     ) -> MASOut:
-        """Run one sample. Never raises for per-sample failures: they come
-        back as a row with pred=None and the reason in `error`."""
-        team = self.parse_plan(self.plan(param, task_instruction), param)
-        session = Session(param, task_context=prompt, sample_id=sample_id)
+        """Run one review. Failures come back as pred=None with the reason in ``error``."""
+        param = self.params
+        team = self.parse_plan(self.plan(task_instruction))
+        session = Session(
+            param, task_context=prompt, sample_id=sample_id, record=record
+        )
         leader = session.add_agent(team[0][0], team[0][1], is_leader=True)
         members = [session.add_agent(n, p) for n, p in team[1:]]
 
         start = time.time()
         deadline = time.monotonic() + param.timeout_s
         if param.parallel_kickoff:
-            leader.hold = True  # buffer reports; wake once everyone is done
+            leader.hold = True
             for m in members:
                 m.enqueue("user", KICKOFF_MEMBER)
         else:
@@ -177,7 +224,6 @@ class MegaRunner:
                 break
             if not session.wait(remaining) or session.stopped:
                 continue
-            # Everyone is idle and there is no rating yet.
             if leader.hold:
                 leader.release(RELEASE_LEADER)
                 continue
@@ -212,12 +258,13 @@ class MegaRunner:
             f"[{session.id}] pred={out.pred} true={out.true} calls={ncalls} "
             f"tokens={tin}/{tout} {out.duration}s error={out.error}"
         )
+        if record:
+            with self._calls_lock:
+                self.calls_[session.id] = list(session.requests)
         self._save_artifacts(session, out)
         return out
 
     def _save_artifacts(self, session: Session, out: MASOut) -> None:
-        # Written once by the main thread after the run, into a directory
-        # unique to this sample, so there is never contention on a filename.
         if self.run_dir is None:
             return
         try:
@@ -232,38 +279,65 @@ class MegaRunner:
         except OSError as e:
             logger.warning(f"[{session.id}] could not save artifacts: {e}")
 
-    # ---- many samples ----------------------------------------------------
+    # ------------------------------------------------------------------ #
+    # Many reviews
+    # ------------------------------------------------------------------ #
     def run_many(
         self,
-        params: Params,
         task_instruction: str,
         reviews: Sequence[str],
         trues: Optional[Sequence[int]] = None,
+        sample_ids: Optional[Sequence[str]] = None,
         prompt_template: str = "{review}",
         max_workers: int = 4,
         checkpoint_path: Optional[str] = None,
         progress: bool = True,
-    ):
-        """Run every review (in parallel threads) and return a DataFrame with
-        one row per review, in input order. Each finished row is appended to
-        checkpoint_path immediately, so a long run survives interruptions."""
+        record_ids: Optional[Collection[str]] = None,
+    ) -> pd.DataFrame:
+        """Run every review in parallel threads; one row per review, in input order.
 
-        self.plan(params, task_instruction)  # once, before the workers start
+        Parameters
+        ----------
+        task_instruction : str
+            Planning prompt from ``MegaPrompt.get_mega_instructions``.
+        reviews : sequence of str
+        trues : sequence of int, optional
+            Author ratings, only logged.
+        sample_ids : sequence of str, optional
+            Ids used for logs, artifact folders and checkpoints. Defaults to
+            ``s0000``, ``s0001``, ...
+        prompt_template : str, default "{review}"
+            Per-review project input; must contain ``{review}``.
+        max_workers : int, default 4
+        checkpoint_path : str, optional
+            Each finished row is appended here immediately.
+        progress : bool, default True
+            Print one line per finished review.
+        record_ids : collection of str, optional
+            Keep every request for these sample ids in ``calls_``.
+        """
+        self.plan(task_instruction)
         reviews = list(reviews)
         trues = list(trues) if trues is not None else [None] * len(reviews)
+        ids = (
+            list(sample_ids)
+            if sample_ids is not None
+            else [f"s{i:04d}" for i in range(len(reviews))]
+        )
+        record_ids = set(record_ids or ())
         rows: List[Optional[MASOut]] = [None] * len(reviews)
 
         def job(i: int) -> Tuple[int, MASOut]:
             try:
                 out = self.run(
-                    params,
                     task_instruction,
                     prompt_template.format(review=reviews[i]),
                     true=trues[i],
-                    sample_id=f"s{i:04d}",
+                    sample_id=ids[i],
                     review=reviews[i],
+                    record=ids[i] in record_ids,
                 )
-            except Exception as e:  # defensive: a sample can never kill the batch
+            except Exception as e:
                 out = MASOut(
                     None,
                     trues[i],
@@ -272,7 +346,7 @@ class MegaRunner:
                     0,
                     0.0,
                     reviews[i],
-                    f"s{i:04d}",
+                    ids[i],
                     0,
                     f"{type(e).__name__}: {e}",
                 )

@@ -6,6 +6,7 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 import warnings
 import numpy as np
 
+from .mega.config import Params
 from .llm_provider import LLMProvider
 
 
@@ -127,25 +128,32 @@ class MegaConfig:
 
     Parameters
     ----------
-    params : modules.mega_agent_re.Params
-        Model and team settings for the mega agent.
+    llm : LLMProvider, optional
+        Model used by every team member. None uses the runner's predictor.
+        Must be an "openai" provider: the agents rely on tool calling.
+        Its model name, token and temperature replace those in ``params``.
+    params : Params
+        Team settings (size, memory, rounds, timeout, reasoning effort, ...).
     task_instruction : str
-        Task description given to the team leader.
+        Task description given to the leader when it designs the team.
     prompt_template : str
-        Per-review prompt; must contain ``{review}``.
+        Per-review project input; must contain ``{review}``.
     plan_path : str, default "./exports/mega_plan.txt"
         Saved team plan; created on the first run and reused afterwards.
     log_path : str, default "./exports/logs.out"
-        Log file for the mega runner.
-    run_dir : str, default "./exports/mega_runs"
-        Folder for per-run files.
+        Log file.
+    run_dir : str, optional, default "./exports/mega_runs"
+        Folder for each review's files, transcript and result.
     checkpoint_path : str, optional
-        Checkpoint CSV for ``run_many``.
+        Checkpoint CSV; gets a ``_seed<N>`` suffix so each seed has its own.
     max_workers : int, default 4
         Reviews processed in parallel.
+    progress : bool, default False
+        Print one line per finished review.
     """
 
-    params: Any
+    llm: Optional[LLMProvider] = None
+    params: Params = field(default_factory=Params)
     task_instruction: str = (
         "predict the overall star rating (1 to 5) a customer gave a product, using "
         "only the text of their online review. Do not use any label or information "
@@ -157,9 +165,10 @@ class MegaConfig:
     )
     plan_path: str = "./exports/mega_plan.txt"
     log_path: str = "./exports/logs.out"
-    run_dir: str = "./exports/mega_runs"
+    run_dir: Optional[str] = "./exports/mega_runs"
     checkpoint_path: Optional[str] = None
     max_workers: int = 4
+    progress: bool = False
 
 
 def classification_metrics(y_true, y_pred) -> Dict[str, float]:

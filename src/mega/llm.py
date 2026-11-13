@@ -2,7 +2,9 @@ import logging
 import time
 from functools import lru_cache
 
-from . import LLMOut, Params, chat_completion, wrap_tools
+from .. import LLMOut
+from .config import Params
+from .llm_core import chat_completion, wrap_tools
 
 logger = logging.getLogger("mega_agent")
 
@@ -119,8 +121,11 @@ def get_llm_response(
     tools=None,
     tool_choice=None,
 ) -> LLMOut:
-    """One request with retry/backoff. Raises LLMError instead of returning
-    an error dict, so a failing call can never leave an agent half-dead."""
+    """One request with retries. Raises LLMError when every attempt fails.
+
+    The returned LLMOut's ``response`` is the assistant message dict,
+    including any tool calls.
+    """
     tools = tools if enable_tools else None
     last_err = "unknown error"
     for attempt in range(max(1, params.llm_retries)):
@@ -138,8 +143,7 @@ def get_llm_response(
         if "error" not in resp and resp.get("choices"):
             usage = resp.get("usage") or {}
             return LLMOut(
-                response=resp,
-                message=resp["choices"][0]["message"].get("content"),
+                response=resp["choices"][0]["message"],
                 input_token=usage.get("prompt_tokens") or 0,
                 output_token=usage.get("completion_tokens") or 0,
                 model_name=params.model,
