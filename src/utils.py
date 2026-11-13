@@ -59,6 +59,40 @@ class PromptMethod:
 
 
 @dataclass
+class PromptMethod:
+    """One single-call prompting method.
+
+    Parameters
+    ----------
+    strategy : {"zero-shot", "few-shots"}
+    few_shots_type : {"random", "kate"}, default "random"
+        How few-shot examples are chosen. Ignored for zero-shot.
+    chain_of_thought : bool, default False
+        False: the model answers with the rating number only.
+        True: the model reasons step by step and answers with JSON.
+    num_examples : int, default 10
+        Number of few-shot examples.
+    """
+
+    strategy: Literal["zero-shot", "few-shots"]
+    few_shots_type: Literal["random", "kate"] = "random"
+    chain_of_thought: bool = False
+    num_examples: int = 10
+
+
+def default_prompt_methods() -> Dict[str, PromptMethod]:
+    return {
+        "zero_shot": PromptMethod("zero-shot"),
+        "zero_shot_cot": PromptMethod("zero-shot", chain_of_thought=True),
+        "few_shot_random": PromptMethod("few-shots", "random"),
+        "few_shot_random_cot": PromptMethod(
+            "few-shots", "random", chain_of_thought=True
+        ),
+        "few_shot_kate": PromptMethod("few-shots", "kate"),
+    }
+
+
+@dataclass
 class MadConfig:
     """Settings for the multi-agent debate method.
 
@@ -131,18 +165,6 @@ class MegaConfig:
     run_dir: str = "./exports/mega_runs"
     checkpoint_path: Optional[str] = None
     max_workers: int = 4
-
-
-def default_prompt_methods() -> Dict[str, PromptMethod]:
-    return {
-        "zero_shot": PromptMethod("zero-shot"),
-        "zero_shot_cot": PromptMethod("zero-shot", chain_of_thought=True),
-        "few_shot_random": PromptMethod("few-shots", "random"),
-        "few_shot_random_cot": PromptMethod(
-            "few-shots", "random", chain_of_thought=True
-        ),
-        # "few_shot_kate": PromptMethod("few-shots", "kate"),
-    }
 
 
 def classification_metrics(y_true, y_pred) -> Dict[str, float]:

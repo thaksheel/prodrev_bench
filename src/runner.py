@@ -1,18 +1,15 @@
-import json
-import re
-import time
+import json, re, time 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
 import numpy as np
 import pandas as pd
 
-from src.prompts import Prompt, PromptStrategy, RatingReasoning
+from src.prompts import BertEncoder, KATEExamples, PromptBuilder, RandomExamples
+from .mad import Debate
+from .mega import MegaRunner, MegaPrompt
 from . import LLMProvider, ReviewRatingJudge, PromptMethod, RunnerConfig
-from modules.mad_predict_re import Debate
-from modules.mega_agent_re import MegaPrompt, MegaRunner
 
 METRICS = ["accuracy", "balanced_accuracy", "macro_f1", "mae", "rmse"]
 LABELS = [1, 2, 3, 4, 5]
@@ -155,6 +152,7 @@ class Runner:
         self.comparison_: Optional[pd.DataFrame] = None
         self.summary_: Optional[pd.DataFrame] = None
 
+        self._encoder = None
         self._debate = None
         self._mad_references = None
         self._mega_runner = None
@@ -244,34 +242,34 @@ class Runner:
             }
         )
 
-    # ------------------------------------------------------------------ #
-    # Prompting methods
-    # ------------------------------------------------------------------ #
-    def _build_prompt(
-        self, method: PromptMethod, review: str, pool: pd.DataFrame, embeddings
-    ):
-        prompt = Prompt(
-            review=review,
-            chain_of_thought=method.chain_of_thought,
-            rreasoning=RatingReasoning[method.output_format],
-            num_examples=method.num_examples,
-        )
-        strategy = PromptStrategy(
-            prompt, method.strategy, pool, method.few_shots_type, embeddings=embeddings
-        )
-        if method.strategy == "zero-shot":
-            parts = strategy.zero_shot()
-        else:
-            parts = strategy.few_shots(pool)
-        messages = [
-            {"role": "system", "content": parts["system"]},
-            {"role": "user", "content": parts["user"]},
-        ]
-        return messages, strategy
+    def _get_encoder(self) -> BertEncoder:
+        if self._encoder is None:
+            cfg = self.config
+            self._encoder = BertEncoder(
+                cfg.kate_model_path, cfg.kate_device, cfg.kate_batch_size
+            )
+        return self._encoder
 
-    def _predict_one(
-        self, method: PromptMethod, review: str, pool: pd.DataFrame, embeddings
-    ) -> Dict[str, Any]:
+    def _make_builder(self, seed: int, method: PromptMethod) -> PromptBuilder:
+        cfg = self.config
+        if method.strategy == "zero-shot":
+            return PromptBuilder("zero-shot", method.chain_of_thought)
+        pool = self.pools_[seed]
+        if method.few_shots_type == "kate":
+            examples = KATEExamples(
+                pool,
+                self._get_encoder(),
+                method.num_examples,
+                cfg.review_col,
+                cfg.rating_col,
+            )
+        else:
+            examples = RandomExamples(
+                pool, method.num_examples, seed, cfg.review_col, cfg.rating_col
+            )
+        return PromptBuilder("few-shots", method.chain_of_thought, examples)
+
+    def _predict_one(self, builder: PromptBuilder, review: str) -> Dict[str, Any]:
         start = time.time()
         result = {
             "pred": np.nan,
@@ -284,7 +282,7 @@ class Runner:
             "messages": None,
         }
         try:
-            messages, _ = self._build_prompt(method, review, pool, embeddings)
+            messages = builder.messages(review)
             result["messages"] = messages
             result["n_llm_calls"] = 1
             out = self.predictor.invoke(messages=messages)
@@ -301,17 +299,13 @@ class Runner:
         self, seed: int, name: str, method: PromptMethod
     ) -> pd.DataFrame:
         data = self.slices_[seed]
-        pool = self.pools_[seed]
         reviews = data[self.config.review_col].tolist()
-
-        embeddings = None
-        if method.strategy == "few-shots" and method.few_shots_type == "kate":
-            _, strategy = self._build_prompt(method, reviews[0], pool, None)
-            embeddings = strategy.embeddings
+        builder = self._make_builder(seed, method)
+        builder.prepare(reviews)
 
         with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
             futures = [
-                executor.submit(self._predict_one, method, review, pool, embeddings)
+                executor.submit(self._predict_one, builder, review)
                 for review in reviews
             ]
             results = [future.result() for future in futures]
